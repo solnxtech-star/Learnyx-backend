@@ -36,3 +36,13 @@ class AcademicClass(models.TextChoices):
     SS1 = "SS1", _("Senior Secondary 1")
     SS2 = "SS2", _("Senior Secondary 2")
     SS3 = "SS3", _("Senior Secondary 3")
+
+class DayOfWeek(models.TextChoices):
+    """Day of the week choices"""
+    MONDAY = "MONDAY", _("Monday")
+    TUESDAY = "TUESDAY", _("Tuesday")
+    WEDNESDAY = "WEDNESDAY", _("Wednesday")
+    THURSDAY = "THURSDAY", _("Thursday")
+    FRIDAY = "FRIDAY", _("Friday")
+    SATURDAY = "SATURDAY", _("Saturday")
+    SUNDAY = "SUNDAY", _("Sunday")

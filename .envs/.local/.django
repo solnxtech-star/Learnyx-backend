@@ -12,3 +12,6 @@ REDIS_URL=redis://redis:6379/0
 # Flower
 CELERY_FLOWER_USER=fdKbksSHDviMHiiaXSpWcooKespcMuSD
 CELERY_FLOWER_PASSWORD=7GC44lsrd7sa7aBgw1JalSejAzvVBANHNmfzM9gXpLjVjFVZe6S50JKBHfo2IX9K
+# PostgreSQL
+# ------------------------------------------------------------------------------
+DATABASE_URL=postgres://OKsTXPYYvePNXryZJWrVHAcpGyBdUtLL:LdryvLyaztrFtypu3prkAwv6730Jkv89upDEGIXgM7z86I1cD2e1r0O8x8UomGCV@postgres:5432/learnxy_backend
