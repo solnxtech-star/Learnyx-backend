@@ -417,3 +417,5 @@ SIMPLE_JWT = {
 
 # urls setup for admin invites
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:8000")
+
+TEST_MODE = env.bool("DJANGO_TEST_MODE", default=False)
