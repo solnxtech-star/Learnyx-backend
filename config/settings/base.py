@@ -336,7 +336,7 @@ SOCIALACCOUNT_FORMS = {"signup": "core.applications.users.forms.UserSocialSignup
 # django-rest-framework - https://www.django-rest-framework.org/api-guide/settings/
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework.authentication.SessionAuthentication",
+        "core.helper.authentications.CustomJWTAuthentication",
         "rest_framework.authentication.TokenAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
@@ -418,3 +418,5 @@ SIMPLE_JWT = {
 
 # urls setup for admin invites
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:8000")
+
+TEST_MODE = env.bool("DJANGO_TEST_MODE", default=False)
