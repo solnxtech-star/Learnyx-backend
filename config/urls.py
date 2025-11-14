@@ -21,7 +21,7 @@ urlpatterns = [
     path(settings.ADMIN_URL, admin.site.urls),
     # User management
     path("users/", include("core.applications.users.urls", namespace="users")),
-    path('timetable/', include('core.applications.timetable.urls', namespace='timetable')),
+    path('api/timetable/', include('core.applications.timetable.urls', namespace='timetable')),
     path("accounts/", include("allauth.urls")),
     path("api/auth/", include("core.applications.users.api.jwt")),
     # Your stuff: custom urls includes go here

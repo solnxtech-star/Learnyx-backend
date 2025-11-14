@@ -55,3 +55,10 @@ class StudentProfileAdmin(admin.ModelAdmin):
     list_display = ["id", "user", "student_id", "current_class", "status"]
     search_fields = ["student_id", "user__email", "user__name"]
     ordering = ["id"]
+
+@admin.register(TeacherProfile)
+class TeacherProfileAdmin(admin.ModelAdmin):
+    list_display = ["id", "user", "staff_id", "qualification", "specialization", "department"]
+    search_fields = ["staff_id", "user__email", "user__name"]
+    list_filter = ["department", "specialization"]
+    ordering = ["id"]

@@ -52,12 +52,47 @@ class SubjectViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated()]
         return [IsAuthenticated()]
     
-    def perform_create(self, serializer):
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(
+            {
+                "success": True,
+                "message": "Subjects retrieved successfully",
+                "data": serializer.data
+            }
+        )
+    
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response(
+            {
+                "success": True,
+                "message": "Subject retrieved successfully",
+                "data": serializer.data
+            }
+        )
+    
+    def create(self, request, *args, **kwargs):
         # Only admins and teachers can create subjects
-        if self.request.user.role not in [UserRole.ADMIN, UserRole.TEACHER]:
+        if request.user.role not in [UserRole.ADMIN, UserRole.TEACHER]:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Only admins and teachers can create subjects.")
-        serializer.save()
+        
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        
+        # Custom response format
+        return Response(
+            {
+                "success": True,
+                "message": "Subject created successfully",
+                "data": serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
     
     def perform_update(self, serializer):
         # Only admins and teachers can update subjects
@@ -65,6 +100,21 @@ class SubjectViewSet(viewsets.ModelViewSet):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Only admins and teachers can update subjects.")
         serializer.save()
+    
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        
+        return Response(
+            {
+                "success": True,
+                "message": "Subject updated successfully",
+                "data": serializer.data
+            }
+        )
     
     def perform_destroy(self, instance):
         # Only admins can delete subjects
@@ -74,6 +124,18 @@ class SubjectViewSet(viewsets.ModelViewSet):
         # Soft delete by setting is_active to False
         instance.is_active = False
         instance.save()
+    
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(
+            {
+                "success": True,
+                "message": "Subject deleted successfully",
+                "data": None
+            },
+            status=status.HTTP_200_OK
+        )
 
 
 @extend_schema_view(
@@ -98,11 +160,45 @@ class TimeSlotViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return TimeSlot.objects.all().order_by('order', 'start_time')
     
-    def perform_create(self, serializer):
-        if self.request.user.role != UserRole.ADMIN:
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(
+            {
+                "success": True,
+                "message": "Time slots retrieved successfully",
+                "data": serializer.data
+            }
+        )
+    
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response(
+            {
+                "success": True,
+                "message": "Time slot retrieved successfully",
+                "data": serializer.data
+            }
+        )
+    
+    def create(self, request, *args, **kwargs):
+        if request.user.role != UserRole.ADMIN:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Only admins can create time slots.")
-        serializer.save()
+        
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        
+        return Response(
+            {
+                "success": True,
+                "message": "Time slot created successfully",
+                "data": serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
     
     def perform_update(self, serializer):
         if self.request.user.role != UserRole.ADMIN:
@@ -110,11 +206,38 @@ class TimeSlotViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Only admins can update time slots.")
         serializer.save()
     
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        
+        return Response(
+            {
+                "success": True,
+                "message": "Time slot updated successfully",
+                "data": serializer.data
+            }
+        )
+    
     def perform_destroy(self, instance):
         if self.request.user.role != UserRole.ADMIN:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Only admins can delete time slots.")
         instance.delete()
+    
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(
+            {
+                "success": True,
+                "message": "Time slot deleted successfully",
+                "data": None
+            },
+            status=status.HTTP_200_OK
+        )
 
 
 @extend_schema_view(
@@ -160,11 +283,45 @@ class ClassScheduleViewSet(viewsets.ModelViewSet):
             return ClassScheduleListSerializer
         return ClassScheduleSerializer
     
-    def perform_create(self, serializer):
-        if self.request.user.role != UserRole.ADMIN:
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(
+            {
+                "success": True,
+                "message": "Class schedules retrieved successfully",
+                "data": serializer.data
+            }
+        )
+    
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response(
+            {
+                "success": True,
+                "message": "Class schedule retrieved successfully",
+                "data": serializer.data
+            }
+        )
+    
+    def create(self, request, *args, **kwargs):
+        if request.user.role != UserRole.ADMIN:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Only admins can create class schedules.")
-        serializer.save()
+        
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        
+        return Response(
+            {
+                "success": True,
+                "message": "Class schedule created successfully",
+                "data": serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
     
     def perform_update(self, serializer):
         if self.request.user.role != UserRole.ADMIN:
@@ -172,11 +329,38 @@ class ClassScheduleViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Only admins can update class schedules.")
         serializer.save()
     
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        
+        return Response(
+            {
+                "success": True,
+                "message": "Class schedule updated successfully",
+                "data": serializer.data
+            }
+        )
+    
     def perform_destroy(self, instance):
         if self.request.user.role != UserRole.ADMIN:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Only admins can delete class schedules.")
         instance.delete()
+    
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(
+            {
+                "success": True,
+                "message": "Class schedule deleted successfully",
+                "data": None
+            },
+            status=status.HTTP_200_OK
+        )
     
     @extend_schema(
         description="Get schedules filtered by day of week",
@@ -195,13 +379,23 @@ class ClassScheduleViewSet(viewsets.ModelViewSet):
         day = request.query_params.get('day', '').upper()
         if not day:
             return Response(
-                {"error": "Day parameter is required"},
+                {
+                    "success": False,
+                    "message": "Day parameter is required",
+                    "data": None
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         queryset = self.get_queryset().filter(day_of_week=day)
         serializer = ClassScheduleListSerializer(queryset, many=True)
-        return Response(serializer.data)
+        return Response(
+            {
+                "success": True,
+                "message": f"Schedules for {day} retrieved successfully",
+                "data": serializer.data
+            }
+        )
     
     @extend_schema(
         description="Get schedules filtered by class",
@@ -220,7 +414,11 @@ class ClassScheduleViewSet(viewsets.ModelViewSet):
         academic_class = request.query_params.get('class', '')
         if not academic_class:
             return Response(
-                {"error": "Class parameter is required"},
+                {
+                    "success": False,
+                    "message": "Class parameter is required",
+                    "data": None
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -234,7 +432,13 @@ class ClassScheduleViewSet(viewsets.ModelViewSet):
         
         queryset = self.get_queryset().filter(academic_class=academic_class)
         serializer = ClassScheduleListSerializer(queryset, many=True)
-        return Response(serializer.data)
+        return Response(
+            {
+                "success": True,
+                "message": f"Schedules for {academic_class} retrieved successfully",
+                "data": serializer.data
+            }
+        )
 
 
 @extend_schema_view(
@@ -282,11 +486,45 @@ class TimetableViewSet(viewsets.ModelViewSet):
         context['request'] = self.request
         return context
     
-    def perform_create(self, serializer):
-        if self.request.user.role != UserRole.ADMIN:
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(
+            {
+                "success": True,
+                "message": "Timetables retrieved successfully",
+                "data": serializer.data
+            }
+        )
+    
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response(
+            {
+                "success": True,
+                "message": "Timetable retrieved successfully",
+                "data": serializer.data
+            }
+        )
+    
+    def create(self, request, *args, **kwargs):
+        if request.user.role != UserRole.ADMIN:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Only admins can create timetables.")
-        serializer.save()
+        
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        
+        return Response(
+            {
+                "success": True,
+                "message": "Timetable created successfully",
+                "data": serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
     
     def perform_update(self, serializer):
         if self.request.user.role != UserRole.ADMIN:
@@ -294,11 +532,38 @@ class TimetableViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Only admins can update timetables.")
         serializer.save()
     
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        
+        return Response(
+            {
+                "success": True,
+                "message": "Timetable updated successfully",
+                "data": serializer.data
+            }
+        )
+    
     def perform_destroy(self, instance):
         if self.request.user.role != UserRole.ADMIN:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Only admins can delete timetables.")
         instance.delete()
+    
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(
+            {
+                "success": True,
+                "message": "Timetable deleted successfully",
+                "data": None
+            },
+            status=status.HTTP_200_OK
+        )
     
     @extend_schema(
         description="Get the current active timetable for the logged-in student",
@@ -309,13 +574,21 @@ class TimetableViewSet(viewsets.ModelViewSet):
         """Get current active timetable for the logged-in student"""
         if request.user.role != UserRole.STUDENT:
             return Response(
-                {"error": "This endpoint is only for students"},
+                {
+                    "success": False,
+                    "message": "This endpoint is only for students",
+                    "data": None
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
         
         if not hasattr(request.user, 'studentprofile'):
             return Response(
-                {"error": "Student profile not found"},
+                {
+                    "success": False,
+                    "message": "Student profile not found",
+                    "data": None
+                },
                 status=status.HTTP_404_NOT_FOUND
             )
         
@@ -331,7 +604,11 @@ class TimetableViewSet(viewsets.ModelViewSet):
         
         if not timetable:
             return Response(
-                {"error": "No active timetable found"},
+                {
+                    "success": False,
+                    "message": "No active timetable found",
+                    "data": None
+                },
                 status=status.HTTP_404_NOT_FOUND
             )
         
@@ -339,7 +616,13 @@ class TimetableViewSet(viewsets.ModelViewSet):
             timetable,
             context={'request': request}
         )
-        return Response(serializer.data)
+        return Response(
+            {
+                "success": True,
+                "message": "Your timetable retrieved successfully",
+                "data": serializer.data
+            }
+        )
     
     @extend_schema(
         description="Get the currently active timetable",
@@ -356,9 +639,19 @@ class TimetableViewSet(viewsets.ModelViewSet):
         
         if not timetable:
             return Response(
-                {"error": "No active timetable found"},
+                {
+                    "success": False,
+                    "message": "No active timetable found",
+                    "data": None
+                },
                 status=status.HTTP_404_NOT_FOUND
             )
         
         serializer = self.get_serializer(timetable)
-        return Response(serializer.data)
+        return Response(
+            {
+                "success": True,
+                "message": "Active timetable retrieved successfully",
+                "data": serializer.data
+            }
+        )
