@@ -1,0 +1,7 @@
+# PostgreSQL
+# ------------------------------------------------------------------------------
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_DB=learnxy_backend
+POSTGRES_USER=OKsTXPYYvePNXryZJWrVHAcpGyBdUtLL
+POSTGRES_PASSWORD=LdryvLyaztrFtypu3prkAwv6730Jkv89upDEGIXgM7z86I1cD2e1r0O8x8UomGCV
