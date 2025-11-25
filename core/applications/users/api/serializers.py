@@ -1,3 +1,4 @@
+import uuid
 import contextlib
 from typing import Literal
 
@@ -18,10 +19,10 @@ from django.db import transaction
 from math import radians, cos, sin, asin, sqrt
 
 
-from core.applications.users.models import StudentProfile, User
+from core.applications.users.models import AdminProfile, School, StudentProfile, TeacherProfile, User
 from core.applications.users.token import default_token_generator
 from core.helper.custom_exceptions import CustomError
-from core.helper.enums import AcademicClass, Gender, UserRole
+from core.helper.enums import AcademicClass, AdminType, AdmissionStatus, Gender, UserRole
 from core.helper.interface import BaseModelNoDefs
 
 
@@ -29,6 +30,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
     """Serializer for listing or basic user details."""
 
     role_display = serializers.CharField(source="get_role_display", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
 
     class Meta:
         model = User
@@ -39,110 +41,235 @@ class CustomUserSerializer(serializers.ModelSerializer):
             "phone_number",
             "role",
             "role_display",
+            "status_display",
             "is_active",
             "is_verified",
             "date_joined",
             "last_login",
         ]
-        read_only_fields = ["id", "date_joined", "last_login", "role_display"]
+        read_only_fields = [
+            "id",
+            "date_joined",
+            "last_login",
+            "role_display",
+            "status_display",
+        ]
 
 
-class CustomUserCreateSerializer(UserCreateSerializer):
+class BaseRoleCreateSerializer(UserCreateSerializer):
     """
-    Handles registration for both general users and students.
-    Automatically creates a StudentProfile if student fields are provided.
+    Base serializer for all user-role registrations.
+    Handles:
+    - Password confirmation
+    - Extracting profile fields safely
+    - Assigning school for Student/Teacher
+    - Admin owner/admin logic
     """
 
-    # Password confirmation
-    re_password = serializers.CharField(
-        style={"input_type": "password"},
-        required=True,
-        write_only=True,
-    )
+    re_password = serializers.CharField(write_only=True, required=True)
 
-    # Student-specific fields
-    gender = serializers.ChoiceField(
-        choices=Gender.choices,
-        required=False,
-        help_text="Student's gender"
-    )
-    current_class = serializers.ChoiceField(
-        choices=AcademicClass.choices,
-        required=False,
-        help_text="Student's current class"
-    )
-    guardian_name = serializers.CharField(required=False, max_length=100)
-    guardian_phone = serializers.CharField(required=False, max_length=20)
-    address = serializers.CharField(required=False, max_length=255)
+    # To be overridden
+    role = None
+    profile_model = None
+    profile_fields = []
+
+    # These are NOT User model fields
+    school_code = serializers.CharField(write_only=True, required=False)
+    school_id = serializers.UUIDField(write_only=True, required=False)
 
     class Meta(UserCreateSerializer.Meta):
         model = User
-        fields = (
-            "name",
-            "phone_number",
-            "email",
-            "password",
+        fields = UserCreateSerializer.Meta.fields + (
             "re_password",
+            "school_code",
+            "school_id",
+        )
+        extra_kwargs = {
+            "password": {"write_only": True},
+            "re_password": {"write_only": True},
+        }
+
+    # ---------------------------------------
+    # VALIDATION
+    # ---------------------------------------
+    def validate(self, attrs):
+        # 1. Handle password confirmation
+        re_password = attrs.pop("re_password", None)
+        if not re_password:
+            raise CustomError.BadRequest({"re_password": "This field is required."})
+        self._re_password = re_password
+
+        # 2. Extract profile fields BEFORE Djoser validation
+        extracted = {}
+        for field in self.profile_fields:
+            if field in attrs:
+                extracted[field] = attrs.pop(field)
+
+        self._profile_data = {
+            k: v for k, v in extracted.items() if v not in ("", None)
+        }
+
+        # 3. Extract school fields (store for create())
+        self._school_code = attrs.pop("school_code", None)
+        self._school_id = attrs.pop("school_id", None)
+
+        # 4. Djoser validation
+        attrs = super().validate(attrs)
+
+        # 5. Confirm password
+        if attrs["password"] != self._re_password:
+            raise CustomError.BadRequest({"re_password": "Passwords do not match."})
+
+        return attrs
+
+    # ---------------------------------------
+    # CREATE USER + SCHOOL + PROFILE
+    # ---------------------------------------
+    @transaction.atomic
+    def create(self, validated_data):
+        # Create User using Djoser logic
+        user = super().create(validated_data)
+        user.role = self.role
+
+        # SCHOOL ASSIGNMENT
+        if self.role in [UserRole.STUDENT, UserRole.TEACHER]:
+            if not self._school_code:
+                raise CustomError.BadRequest({"school_code": "This field is required."})
+
+            school = School.objects.filter(school_code=self._school_code).first()
+            if not school:
+                raise CustomError.NotFound({"school_code": "Invalid school_code."})
+
+            user.school = school
+
+            # If User model has `status`
+            if hasattr(user, "status"):
+                user.status = AdmissionStatus.PENDING
+
+        elif self.role == UserRole.ADMIN:
+            # OWNER TYPE (school_id required)
+            if self._school_id:
+                school = School.objects.filter(id=self._school_id).first()
+                if not school:
+                    raise CustomError.NotFound({"school_id": "Invalid school_id."})
+                user.school = school
+
+            # REGULAR ADMIN (via school_code)
+            elif self._school_code:
+                school = School.objects.filter(school_code=self._school_code).first()
+                if not school:
+                    raise CustomError.NotFound({"school_code": "Invalid school_code."})
+                user.school = school
+
+            else:
+                raise CustomError.BadRequest({
+                    "school": "Provide either school_id (owner) or school_code (admin)."
+                })
+
+        # Save user with new role/school/status
+        update_fields = ["role"]
+        if user.school:
+            update_fields.append("school")
+        if hasattr(user, "status"):
+            update_fields.append("status")
+
+        user.save(update_fields=list(set(update_fields)))
+
+        # ---------------------------------------
+        # CREATE PROFILE
+        # ---------------------------------------
+        if self.profile_model:
+            profile_data = dict(self._profile_data)
+
+            # AUTO STAFF ID (Teacher)
+            if self.profile_model is TeacherProfile and not profile_data.get("staff_id"):
+                profile_data["staff_id"] = f"STF-{uuid.uuid4().hex[:8].upper()}"
+
+            # StudentProfile auto-generated student_id happens in model.save()
+            self.profile_model.objects.create(user=user, **profile_data)
+
+        return user
+
+class CustomUserCreateSerializer(BaseRoleCreateSerializer):
+    role = UserRole.STUDENT
+    profile_model = StudentProfile
+
+    profile_fields = [
+        "gender",
+        "current_class",
+        "guardian_name",
+        "guardian_phone",
+        "address",
+    ]
+
+    gender = serializers.ChoiceField(choices=Gender.choices, required=False)
+    current_class = serializers.ChoiceField(choices=AcademicClass.choices, required=False)
+    guardian_name = serializers.CharField(required=False, allow_blank=True)
+    guardian_phone = serializers.CharField(required=False, allow_blank=True)
+    address = serializers.CharField(required=False, allow_blank=True)
+
+    school_code = serializers.CharField(write_only=True, required=True)
+
+    class Meta(BaseRoleCreateSerializer.Meta):
+        fields = BaseRoleCreateSerializer.Meta.fields + (
             "gender",
             "current_class",
             "guardian_name",
             "guardian_phone",
             "address",
         )
-        extra_kwargs = {
-            "re_password": {"write_only": True},
-            "password": {"write_only": True},
-        }
 
-    def validate(self, attrs):
-        """
-        Ensure passwords match and remove profile-related fields
-        before passing to parent validation.
-        """
-        re_password = attrs.pop("re_password", None)
 
-        # Remove student fields before Djoser validation
-        student_fields = {
-            "gender": attrs.pop("gender", None),
-            "current_class": attrs.pop("current_class", None),
-            "guardian_name": attrs.pop("guardian_name", None),
-            "guardian_phone": attrs.pop("guardian_phone", None),
-            "address": attrs.pop("address", None),
-        }
+class CustomTeacherCreateSerializer(BaseRoleCreateSerializer):
+    role = UserRole.TEACHER
+    profile_model = TeacherProfile
 
-        # Store them for later use in create()
-        self._student_fields = student_fields
+    profile_fields = [
+        "qualification",
+        "specialization",
+        "department",
+        "staff_id",
+    ]
 
-        # Let Djoser handle user validation safely
-        attrs = super().validate(attrs)
+    qualification = serializers.CharField(required=False, allow_blank=True)
+    specialization = serializers.CharField(required=False, allow_blank=True)
+    department = serializers.CharField(required=False, allow_blank=True)
+    staff_id = serializers.CharField(required=False, allow_blank=True)
 
-        # Password match check
-        if attrs.get("password") != re_password:
-            raise CustomError.BadRequest({"re_password": "Passwords do not match."})
+    school_code = serializers.CharField(write_only=True, required=True)
 
-        return attrs
+    class Meta(BaseRoleCreateSerializer.Meta):
+        fields = BaseRoleCreateSerializer.Meta.fields + (
+            "qualification",
+            "specialization",
+            "department",
+            "staff_id",
+        )
 
-    @transaction.atomic
-    def create(self, validated_data):
-        """
-        Create user and optionally a StudentProfile.
-        """
-        student_fields = getattr(self, "_student_fields", {})
 
-        # Create the base user
-        user = super().create(validated_data)
+class CustomAdminCreateSerializer(BaseRoleCreateSerializer):
+    role = UserRole.ADMIN
+    profile_model = AdminProfile
 
-        # Detect if student registration
-        if any(student_fields.values()):
-            user.role = UserRole.STUDENT
-            user.save(update_fields=["role"])
+    profile_fields = ["admin_type", "position", "school_name"]
 
-            StudentProfile.objects.create(
-                user=user,
-                **{k: v for k, v in student_fields.items() if v is not None}
-            )
+    admin_type = serializers.ChoiceField(choices=AdminType.choices, required=True)
+    position = serializers.CharField(required=False, allow_blank=True)
+    school_name = serializers.CharField(required=False, allow_blank=True)
 
-        return user
+    school_id = serializers.UUIDField(write_only=True, required=False)
+    school_code = serializers.CharField(write_only=True, required=False)
+
+    class Meta(BaseRoleCreateSerializer.Meta):
+        fields = BaseRoleCreateSerializer.Meta.fields + (
+            "admin_type",
+            "school_id",
+            "school_code",
+            "position",
+            "school_name",
+        )
+
+
 
 class OSNameSchema(BaseModelNoDefs):
     Android: Literal["Android"] | None = None
