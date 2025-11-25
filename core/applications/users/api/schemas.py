@@ -3,7 +3,6 @@ from core.applications.users.api import serializers as user_serializers
 
 
 user_schema = extend_schema_view(
-
     # ============================================================
     # USER CRUD & SELF MANAGEMENT
     # ============================================================
@@ -17,7 +16,6 @@ user_schema = extend_schema_view(
         ),
         responses={200: user_serializers.CustomUserSerializer(many=True)},
     ),
-
     retrieve=extend_schema(
         summary="Retrieve a User",
         description=(
@@ -26,7 +24,6 @@ user_schema = extend_schema_view(
         ),
         responses={200: user_serializers.CustomUserSerializer},
     ),
-
     me=extend_schema(
         summary="Current Authenticated User",
         description=(
@@ -40,7 +37,6 @@ user_schema = extend_schema_view(
         ),
         responses={200: user_serializers.CustomUserSerializer},
     ),
-
     get_by_email=extend_schema(
         summary="Find User by Email",
         description=(
@@ -49,7 +45,6 @@ user_schema = extend_schema_view(
         ),
         responses={200: user_serializers.UserSerializer.Info},
     ),
-
     # ============================================================
     # USER REGISTRATION & ONBOARDING
     # ============================================================
@@ -65,7 +60,6 @@ user_schema = extend_schema_view(
         request=user_serializers.CustomUserCreateSerializer,
         responses={201: user_serializers.CustomUserSerializer},
     ),
-
     register_teacher=extend_schema(
         summary="Register a Teacher (Admin Only)",
         description=(
@@ -78,7 +72,6 @@ user_schema = extend_schema_view(
         request=user_serializers.CustomTeacherCreateSerializer,
         responses={201: user_serializers.CustomUserSerializer},
     ),
-
     register_admin=extend_schema(
         summary="Register a New Admin",
         description=(
@@ -90,7 +83,6 @@ user_schema = extend_schema_view(
         request=user_serializers.CustomAdminCreateSerializer,
         responses={201: user_serializers.CustomUserSerializer},
     ),
-
     # ============================================================
     # ACCOUNT ACTIVATION & EMAIL VERIFICATION
     # ============================================================
@@ -104,7 +96,6 @@ user_schema = extend_schema_view(
         request=user_serializers.ActivationSerializer,
         responses={204: None},
     ),
-
     resend_activation=extend_schema(
         summary="Resend Activation Link",
         description=(
@@ -114,7 +105,6 @@ user_schema = extend_schema_view(
         ),
         responses={204: None},
     ),
-
     # ============================================================
     # PASSWORD RESET & UPDATE FLOW
     # ============================================================
@@ -127,7 +117,6 @@ user_schema = extend_schema_view(
         ),
         responses={204: None},
     ),
-
     reset_password_confirm=extend_schema(
         summary="Reset Password (Confirm)",
         description=(
@@ -137,7 +126,6 @@ user_schema = extend_schema_view(
         request=user_serializers.PasswordResetConfirmSerializer,
         responses={204: None},
     ),
-
     set_password=extend_schema(
         summary="Change Password (Authenticated User)",
         description=(
@@ -147,7 +135,6 @@ user_schema = extend_schema_view(
         request=user_serializers.PasswordSerializer,
         responses={204: None},
     ),
-
     # ============================================================
     # DEVICES (OPTIONAL MODULE)
     # ============================================================
@@ -158,18 +145,17 @@ user_schema = extend_schema_view(
             "Useful for session management, push notifications, and device audits."
         ),
     ),
-
-    add_or_update_device=extend_schema(
-        summary="Register / Update Device",
-        description=(
-            "Registers a new device or updates an existing device record.\n\n"
-            "Intended for mobile apps where you store:\n"
-            "- Device model\n"
-            - OS information\n"
-            "- Push notification token\n\n"
-            "Helps with targeted push notifications and device-level security."
-        ),
-        request=user_serializers.UserSerializer.AddOrRetrieveDevice,
-        responses={200: user_serializers.CustomUserSerializer},
-    ),
+    # add_or_update_device=extend_schema(
+    #     summary="Register / Update Device",
+    #     description=(
+    #         "Registers a new device or updates an existing device record.\n\n"
+    #         "Intended for mobile apps where you store:\n"
+    #         "- Device model\n"
+    #         - OS information\n"
+    #         "- Push notification token\n\n"
+    #         "Helps with targeted push notifications and device-level security."
+    #     ),
+    #     request=user_serializers.UserSerializer.AddOrRetrieveDevice,
+    #     responses={200: user_serializers.CustomUserSerializer},
+    # ),
 )

@@ -457,8 +457,10 @@ class UserViewSet(ModelViewSet):
         description="Registers a new student and creates a StudentProfile.",
     )
     @action(
-        detail=False, methods=["post"], url_path="register/student",
-        permission_classes=[AllowAny]
+        detail=False,
+        methods=["post"],
+        url_path="register/student",
+        permission_classes=[AllowAny],
     )
     def register_student(self, request, *args, **kwargs):
         serializer = CustomUserCreateSerializer(data=request.data)
@@ -470,13 +472,14 @@ class UserViewSet(ModelViewSet):
 
         return Response(
             {"message": "Student registered successfully", "user_id": user.id},
-            status=status.HTTP_201_CREATED
+            status=status.HTTP_201_CREATED,
         )
 
-    
     @action(
-        detail=False, methods=["post"], url_path="register/teacher",
-        permission_classes=[AllowAny]
+        detail=False,
+        methods=["post"],
+        url_path="register/teacher",
+        permission_classes=[AllowAny],
     )
     def register_teacher(self, request, *args, **kwargs):
         serializer = CustomTeacherCreateSerializer(data=request.data)
@@ -487,15 +490,14 @@ class UserViewSet(ModelViewSet):
 
         return Response(
             {"message": "Teacher registered successfully", "user_id": user.id},
-            status=status.HTTP_201_CREATED
+            status=status.HTTP_201_CREATED,
         )
 
-
-
-    
     @action(
-        detail=False, methods=["post"], url_path="register/admin",
-        permission_classes=[AllowAny]
+        detail=False,
+        methods=["post"],
+        url_path="register/admin",
+        permission_classes=[AllowAny],
     )
     def register_admin(self, request, *args, **kwargs):
         serializer = CustomAdminCreateSerializer(data=request.data)
@@ -506,10 +508,8 @@ class UserViewSet(ModelViewSet):
 
         return Response(
             {"message": "Admin registered successfully", "user_id": user.id},
-            status=status.HTTP_201_CREATED
+            status=status.HTTP_201_CREATED,
         )
-
-
 
     @action(
         ["post"],

@@ -19,10 +19,22 @@ from django.db import transaction
 from math import radians, cos, sin, asin, sqrt
 
 
-from core.applications.users.models import AdminProfile, School, StudentProfile, TeacherProfile, User
+from core.applications.users.models import (
+    AdminProfile,
+    School,
+    StudentProfile,
+    TeacherProfile,
+    User,
+)
 from core.applications.users.token import default_token_generator
 from core.helper.custom_exceptions import CustomError
-from core.helper.enums import AcademicClass, AdminType, AdmissionStatus, Gender, UserRole
+from core.helper.enums import (
+    AcademicClass,
+    AdminType,
+    AdmissionStatus,
+    Gender,
+    UserRole,
+)
 from core.helper.interface import BaseModelNoDefs
 
 
@@ -105,9 +117,7 @@ class BaseRoleCreateSerializer(UserCreateSerializer):
             if field in attrs:
                 extracted[field] = attrs.pop(field)
 
-        self._profile_data = {
-            k: v for k, v in extracted.items() if v not in ("", None)
-        }
+        self._profile_data = {k: v for k, v in extracted.items() if v not in ("", None)}
 
         # 3. Extract school fields (store for create())
         self._school_code = attrs.pop("school_code", None)
@@ -162,9 +172,11 @@ class BaseRoleCreateSerializer(UserCreateSerializer):
                 user.school = school
 
             else:
-                raise CustomError.BadRequest({
-                    "school": "Provide either school_id (owner) or school_code (admin)."
-                })
+                raise CustomError.BadRequest(
+                    {
+                        "school": "Provide either school_id (owner) or school_code (admin)."
+                    }
+                )
 
         # Save user with new role/school/status
         update_fields = ["role"]
@@ -182,13 +194,16 @@ class BaseRoleCreateSerializer(UserCreateSerializer):
             profile_data = dict(self._profile_data)
 
             # AUTO STAFF ID (Teacher)
-            if self.profile_model is TeacherProfile and not profile_data.get("staff_id"):
+            if self.profile_model is TeacherProfile and not profile_data.get(
+                "staff_id"
+            ):
                 profile_data["staff_id"] = f"STF-{uuid.uuid4().hex[:8].upper()}"
 
             # StudentProfile auto-generated student_id happens in model.save()
             self.profile_model.objects.create(user=user, **profile_data)
 
         return user
+
 
 class CustomUserCreateSerializer(BaseRoleCreateSerializer):
     role = UserRole.STUDENT
@@ -203,7 +218,9 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
     ]
 
     gender = serializers.ChoiceField(choices=Gender.choices, required=False)
-    current_class = serializers.ChoiceField(choices=AcademicClass.choices, required=False)
+    current_class = serializers.ChoiceField(
+        choices=AcademicClass.choices, required=False
+    )
     guardian_name = serializers.CharField(required=False, allow_blank=True)
     guardian_phone = serializers.CharField(required=False, allow_blank=True)
     address = serializers.CharField(required=False, allow_blank=True)
@@ -268,7 +285,6 @@ class CustomAdminCreateSerializer(BaseRoleCreateSerializer):
             "position",
             "school_name",
         )
-
 
 
 class OSNameSchema(BaseModelNoDefs):
