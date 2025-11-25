@@ -24,18 +24,19 @@ from django.utils import timezone
 
 from config.settings.base import LOGGING
 
-from core.applications.users.models import (
-
-    User
-)
+from core.applications.users.models import User
 from core.applications.users.token import default_token_generator
 from core.helper.custom_exceptions import CustomError
 from rest_framework import permissions
 from django.db.models import Q
 
-from .serializers import (
+from core.applications.users.api.schemas import user_schema
 
-    UserSerializer
+from .serializers import (
+    CustomAdminCreateSerializer,
+    CustomTeacherCreateSerializer,
+    CustomUserCreateSerializer,
+    UserSerializer,
 )
 
 
@@ -172,6 +173,7 @@ token_blacklist = TokenBlacklistView.as_view()
 
 
 #  user
+@user_schema
 @extend_schema(tags=["User"])
 class UserViewSet(ModelViewSet):
     serializer_class = settings.SERIALIZERS.user
@@ -449,6 +451,65 @@ class UserViewSet(ModelViewSet):
         instance = self.get_object()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+
+    @extend_schema(
+        summary="Student Registration",
+        description="Registers a new student and creates a StudentProfile.",
+    )
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="register/student",
+        permission_classes=[AllowAny],
+    )
+    def register_student(self, request, *args, **kwargs):
+        serializer = CustomUserCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        # Use the same creation flow as DRF + Djoser
+        self.perform_create(serializer)
+        user = serializer.instance
+
+        return Response(
+            {"message": "Student registered successfully", "user_id": user.id},
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="register/teacher",
+        permission_classes=[AllowAny],
+    )
+    def register_teacher(self, request, *args, **kwargs):
+        serializer = CustomTeacherCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        self.perform_create(serializer)
+        user = serializer.instance
+
+        return Response(
+            {"message": "Teacher registered successfully", "user_id": user.id},
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="register/admin",
+        permission_classes=[AllowAny],
+    )
+    def register_admin(self, request, *args, **kwargs):
+        serializer = CustomAdminCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        self.perform_create(serializer)
+        user = serializer.instance
+
+        return Response(
+            {"message": "Admin registered successfully", "user_id": user.id},
+            status=status.HTTP_201_CREATED,
+        )
 
     @action(
         ["post"],

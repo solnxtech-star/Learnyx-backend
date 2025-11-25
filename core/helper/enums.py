@@ -46,3 +46,12 @@ class DayOfWeek(models.TextChoices):
     FRIDAY = "FRIDAY", _("Friday")
     SATURDAY = "SATURDAY", _("Saturday")
     SUNDAY = "SUNDAY", _("Sunday")
+    
+    
+class AdminType(models.TextChoices):
+    SCHOOL_OWNER = "school_owner", "School Owner"
+    PRINCIPAL = "principal", "Principal"
+    VICE_PRINCIPAL = "vice_principal", "Vice Principal"
+    BURSAR = "bursar", "Bursar"
+    HR = "hr", "Human Resources Admin"
+    OTHER = "other", "Other"
