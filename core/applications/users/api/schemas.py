@@ -1,5 +1,11 @@
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from drf_spectacular.utils import (
+    extend_schema,
+    extend_schema_view,
+    OpenApiParameter,
+    OpenApiTypes,
+)
 from core.applications.users.api.serializers import serializers as user_serializers
+from core.helper.enums import AdmissionStatus
 
 
 user_schema = extend_schema_view(
@@ -145,17 +151,78 @@ user_schema = extend_schema_view(
             "Useful for session management, push notifications, and device audits."
         ),
     ),
-    # add_or_update_device=extend_schema(
-    #     summary="Register / Update Device",
-    #     description=(
-    #         "Registers a new device or updates an existing device record.\n\n"
-    #         "Intended for mobile apps where you store:\n"
-    #         "- Device model\n"
-    #         - OS information\n"
-    #         "- Push notification token\n\n"
-    #         "Helps with targeted push notifications and device-level security."
-    #     ),
-    #     request=user_serializers.UserSerializer.AddOrRetrieveDevice,
-    #     responses={200: user_serializers.CustomUserSerializer},
-    # ),
+)
+
+
+TYPE_PARAM = OpenApiParameter(
+    name="type",
+    location=OpenApiParameter.QUERY,
+    description="Profile type to operate on. Allowed values: student, teacher, admin.",
+    required=True,
+    type=OpenApiTypes.STR,
+    enum=["student", "teacher", "admin"],
+)
+
+SEARCH_PARAM = OpenApiParameter(
+    name="search",
+    location=OpenApiParameter.QUERY,
+    description="Search across user name and email.",
+    required=False,
+    type=OpenApiTypes.STR,
+)
+
+STATUS_PARAM = OpenApiParameter(
+    name="status",
+    location=OpenApiParameter.QUERY,
+    description="Filter by profile status.",
+    required=False,
+    type=OpenApiTypes.STR,
+    enum=[AdmissionStatus.PENDING, AdmissionStatus.APPROVED, AdmissionStatus.REJECTED],
+)
+
+CURRENT_CLASS_PARAM = OpenApiParameter(
+    name="current_class",
+    location=OpenApiParameter.QUERY,
+    description="Filter students by current_class.",
+    required=False,
+    type=OpenApiTypes.STR,
+)
+
+DEPARTMENT_PARAM = OpenApiParameter(
+    name="department",
+    location=OpenApiParameter.QUERY,
+    description="Filter teachers by department.",
+    required=False,
+    type=OpenApiTypes.STR,
+)
+
+ORDER_PARAM = OpenApiParameter(
+    name="ordering",
+    location=OpenApiParameter.QUERY,
+    description="Ordering fields, e.g. 'user__name' or '-admission_date'.",
+    required=False,
+    type=OpenApiTypes.STR,
+)
+
+LIST_SCHEMA = extend_schema(
+    parameters=[
+        TYPE_PARAM,
+        SEARCH_PARAM,
+        STATUS_PARAM,
+        CURRENT_CLASS_PARAM,
+        DEPARTMENT_PARAM,
+        ORDER_PARAM,
+    ],
+    description="List profiles in the administrator's school. Use ?type=student|teacher|admin. Supports search, filters and ordering.",
+)
+
+RETRIEVE_SCHEMA = extend_schema(
+    parameters=[TYPE_PARAM],
+    description="Retrieve a single profile resource by id. Supply ?type=student|teacher|admin",
+)
+
+ACTIVATE_SCHEMA = extend_schema(
+    request=None,  # override in view if you want to display serializer
+    parameters=[TYPE_PARAM],
+    description="Activate (approve) or reject a profile. Only School Owner or Principal can call this.",
 )

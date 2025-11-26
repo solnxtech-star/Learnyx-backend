@@ -27,3 +27,21 @@ class CanActivateUsers(BasePermission):
             AdminType.SCHOOL_OWNER,
             AdminType.PRINCIPAL
         }
+
+
+class IsPrincipalOrSchoolOwner(BasePermission):
+    """
+    Only principals and school owners are allowed
+    to view teacher/student/admin lists.
+    """
+
+    def has_permission(self, request, view):
+        user = request.user
+
+        if not hasattr(user, "adminprofile"):
+            return False
+
+        return user.adminprofile.admin_type in [
+            AdminType.PRINCIPAL,
+            AdminType.SCHOOL_OWNER,
+        ]
