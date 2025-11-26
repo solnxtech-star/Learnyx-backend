@@ -351,7 +351,7 @@ REST_FRAMEWORK = {
 CORS_URLS_REGEX = r"^/api/.*$"
 CORS_ALLOWED_ORIGINS = [
     "https://learnyx.vercel.app",
-    "http://localhost:5173/",
+    "http://localhost:5173",
     
 ]
 
@@ -429,3 +429,5 @@ SIMPLE_JWT = {
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:8000")
 
 TEST_MODE = env.bool("DJANGO_TEST_MODE", default=False)
+
+API_VERSION = "api/v1"

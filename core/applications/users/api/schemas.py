@@ -6,7 +6,7 @@ from drf_spectacular.utils import (
 )
 from core.applications.users.api.serializers import serializers as user_serializers
 from core.helper.enums import AdmissionStatus
-
+from drf_spectacular.utils import OpenApiParameter, OpenApiTypes
 
 user_schema = extend_schema_view(
     # ============================================================
@@ -157,16 +157,32 @@ user_schema = extend_schema_view(
 TYPE_PARAM = OpenApiParameter(
     name="type",
     location=OpenApiParameter.QUERY,
-    description="Profile type to operate on. Allowed values: student, teacher, admin.",
+    description=(
+        "REQUIRED. Select which type of profile to operate on.\n\n"
+        "Allowed values:\n"
+        "  • student – Manage student profiles\n"
+        "  • teacher – Manage teacher profiles\n"
+        "  • admin – Manage admin/staff profiles\n\n"
+        "Example:\n"
+        "  /api/admin/users/?type=student\n"
+        "  /api/admin/users/12/?type=teacher\n"
+        "  /api/admin/users/5/activate/?type=admin"
+    ),
     required=True,
     type=OpenApiTypes.STR,
     enum=["student", "teacher", "admin"],
 )
 
+
 SEARCH_PARAM = OpenApiParameter(
     name="search",
     location=OpenApiParameter.QUERY,
-    description="Search across user name and email.",
+    description=(
+        "Search users by name or email.\n\n"
+        "Examples:\n"
+        "  /api/admin/users/?type=student&search=john\n"
+        "  /api/admin/users/?type=teacher&search=gmail.com\n"
+    ),
     required=False,
     type=OpenApiTypes.STR,
 )
@@ -174,7 +190,15 @@ SEARCH_PARAM = OpenApiParameter(
 STATUS_PARAM = OpenApiParameter(
     name="status",
     location=OpenApiParameter.QUERY,
-    description="Filter by profile status.",
+    description=(
+        "Filter profiles by approval status.\n\n"
+        "Allowed values:\n"
+        f"  • {AdmissionStatus.PENDING}\n"
+        f"  • {AdmissionStatus.APPROVED}\n"
+        f"  • {AdmissionStatus.REJECTED}\n\n"
+        "Example:\n"
+        "  /api/admin/users/?type=student&status=PENDING"
+    ),
     required=False,
     type=OpenApiTypes.STR,
     enum=[AdmissionStatus.PENDING, AdmissionStatus.APPROVED, AdmissionStatus.REJECTED],
@@ -183,46 +207,113 @@ STATUS_PARAM = OpenApiParameter(
 CURRENT_CLASS_PARAM = OpenApiParameter(
     name="current_class",
     location=OpenApiParameter.QUERY,
-    description="Filter students by current_class.",
+    description=(
+        "Only applies when type=student.\n"
+        "Filter students by class.\n\n"
+        "Examples:\n"
+        "  /api/admin/users/?type=student&current_class=SS1\n"
+        "  /api/admin/users/?type=student&current_class=JSS2"
+    ),
     required=False,
     type=OpenApiTypes.STR,
 )
+
 
 DEPARTMENT_PARAM = OpenApiParameter(
     name="department",
     location=OpenApiParameter.QUERY,
-    description="Filter teachers by department.",
+    description=(
+        "Only applies when type=teacher.\n"
+        "Filter teachers by department name.\n\n"
+        "Examples:\n"
+        "  /api/admin/users/?type=teacher&department=science\n"
+        "  /api/admin/users/?type=teacher&department=mathematics"
+    ),
     required=False,
     type=OpenApiTypes.STR,
 )
+
 
 ORDER_PARAM = OpenApiParameter(
     name="ordering",
     location=OpenApiParameter.QUERY,
-    description="Ordering fields, e.g. 'user__name' or '-admission_date'.",
+    description=(
+        "Sort the results.\n"
+        "Prefix with '-' for descending order.\n\n"
+        "Common fields:\n"
+        "  • user__name\n"
+        "  • user__email\n"
+        "  • admission_date\n"
+        "  • student_id (students)\n"
+        "  • staff_id (teachers)\n\n"
+        "Examples:\n"
+        "  /api/admin/users/?type=student&ordering=user__name\n"
+        "  /api/admin/users/?type=teacher&ordering=-admission_date"
+    ),
     required=False,
     type=OpenApiTypes.STR,
 )
 
-LIST_SCHEMA = extend_schema(
-    parameters=[
-        TYPE_PARAM,
-        SEARCH_PARAM,
-        STATUS_PARAM,
-        CURRENT_CLASS_PARAM,
-        DEPARTMENT_PARAM,
-        ORDER_PARAM,
-    ],
-    description="List profiles in the administrator's school. Use ?type=student|teacher|admin. Supports search, filters and ordering.",
-)
 
-RETRIEVE_SCHEMA = extend_schema(
-    parameters=[TYPE_PARAM],
-    description="Retrieve a single profile resource by id. Supply ?type=student|teacher|admin",
-)
+def LIST_SCHEMA():
+    return dict(
+        parameters=[
+            TYPE_PARAM,
+            SEARCH_PARAM,
+            STATUS_PARAM,
+            CURRENT_CLASS_PARAM,
+            DEPARTMENT_PARAM,
+            ORDER_PARAM,
+        ],
+        summary="List Profiles",
+        description=(
+            "List all profiles for the selected type.\n\n"
+            "REQUIRED QUERY PARAM:\n"
+            "  ?type=student | teacher | admin\n\n"
+            "Optional filters:\n"
+            "  • ?search=john\n"
+            "  • ?status=PENDING\n"
+            "  • ?current_class=SS1 (only for students)\n"
+            "  • ?department=science (only for teachers)\n"
+            "  • ?ordering=user__name\n\n"
+            "Examples:\n"
+            "  GET /api/admin/users/?type=student\n"
+            "  GET /api/admin/users/?type=teacher&search=ada\n"
+            "  GET /api/admin/users/?type=student&status=PENDING&ordering=-admission_date"
+        ),
+    )
 
-ACTIVATE_SCHEMA = extend_schema(
-    request=None,  # override in view if you want to display serializer
-    parameters=[TYPE_PARAM],
-    description="Activate (approve) or reject a profile. Only School Owner or Principal can call this.",
-)
+
+def RETRIEVE_SCHEMA():
+    return dict(
+        parameters=[TYPE_PARAM],
+        summary="Retrieve a Profile",
+        description=(
+            "Retrieve a single profile by ID.\n\n"
+            "REQUIRED QUERY PARAM:\n"
+            "  ?type=student | teacher | admin\n\n"
+            "Examples:\n"
+            "  GET /api/admin/users/12/?type=student\n"
+            "  GET /api/admin/users/7/?type=teacher"
+        ),
+    )
+
+
+def ACTIVATE_SCHEMA():
+    return dict(
+        parameters=[TYPE_PARAM],
+        summary="Activate or Reject a Profile",
+        description=(
+            "Approve or reject a profile.\n\n"
+            "REQUIRED QUERY PARAM:\n"
+            "  ?type=student | teacher | admin\n\n"
+            "POST BODY EXAMPLE:\n"
+            "{\n"
+            "  \"action\": \"approve\",  // or reject\n"
+            "  \"reason\": \"Documents verified\"\n"
+            "}\n\n"
+            "Examples:\n"
+            "  POST /api/admin/users/12/activate/?type=student\n"
+            "  POST /api/admin/users/8/activate/?type=teacher"
+        ),
+    )
