@@ -1,5 +1,5 @@
 from drf_spectacular.utils import extend_schema, extend_schema_view
-from core.applications.users.api import serializers as user_serializers
+from core.applications.users.api.serializers import serializers as user_serializers
 
 
 user_schema = extend_schema_view(

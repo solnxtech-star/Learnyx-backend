@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from rest_framework.routers import SimpleRouter
 from django.urls import path
 
-from core.applications.users.api.views import UserViewSet
+from core.applications.users.api.views.views import UserViewSet
 
 
 PREFIX = "users"

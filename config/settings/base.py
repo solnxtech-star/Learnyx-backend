@@ -360,15 +360,15 @@ SPECTACULAR_SETTINGS = {
 
 DJOSER = {
     "SERIALIZERS": {
-        "user_create": "core.applications.users.api.serializers.CustomUserCreateSerializer",
-        "user": "core.applications.users.api.serializers.CustomUserSerializer",
-        "current_user": "core.applications.users.api.serializers.GetUser",
-        "password_reset_confirm": "core.applications.users.api.serializers.PasswordResetConfirmSerializer",
-        "password_reset_confirm_retype": "core.applications.users.api.serializers.PasswordResetConfirmRetypeSerializer",
+        "user_create": "core.applications.users.api.serializers.serializers.CustomUserCreateSerializer",
+        "user": "core.applications.users.api.serializers.serializers.CustomUserSerializer",
+        "current_user": "core.applications.users.api.serializers.serializers.GetUser",
+        "password_reset_confirm": "core.applications.users.api.serializers.serializers.PasswordResetConfirmSerializer",
+        "password_reset_confirm_retype": "core.applications.users.api.serializers.serializers.PasswordResetConfirmRetypeSerializer",
         "username_reset": "djoser.serializers.SendEmailResetSerializer",
-        "username_reset_confirm": "core.applications.users.api.serializers.UsernameResetConfirmSerializer",
-        "username_reset_confirm_retype": "core.applications.users.api.serializers.UsernameResetConfirmRetypeSerializer",
-        "activation": "core.applications.users.api.serializers.ActivationSerializer",
+        "username_reset_confirm": "core.applications.users.api.serializers.serializers.UsernameResetConfirmSerializer",
+        "username_reset_confirm_retype": "core.applications.users.api.serializers.serializers.UsernameResetConfirmRetypeSerializer",
+        "activation": "core.applications.users.api.serializers.serializers.ActivationSerializer",
     },
     "PASSWORD_RESET_CONFIRM_URL": "password/reset/confirm/{uid}/{token}",
     "ACTIVATION_URL": "activate/{uid}/{token}",

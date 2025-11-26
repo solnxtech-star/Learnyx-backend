@@ -107,16 +107,39 @@ class User(AbstractUser):
 
 
 class BaseProfile(TimeStampedModel):
-    """Abstract base profile for all role-specific extended data."""
+    """
+    Abstract base profile shared by all role-specific profile models.
+
+    This includes:
+    - A one-to-one relation with the User model
+    - Multi-tenancy support (profile.school references user.school)
+    - Approval workflow fields (status, approved_by)
+    """
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="%(class)s_profile",
+        help_text=_("The user linked to this profile."),
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=AdmissionStatus.choices,
+        default=AdmissionStatus.PENDING,
+        help_text=_("Approval status for this profile.")
+    )
+
+    approved_by = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text=_("Email of the admin who approved or rejected this profile.")
     )
 
     @property
     def school(self):
+        """Return the school this profile belongs to (from user)."""
         return self.user.school
 
     class Meta(auto_prefetch.Model.Meta):
@@ -124,14 +147,27 @@ class BaseProfile(TimeStampedModel):
 
 
 
+
 class AdminProfile(BaseProfile):
+    """
+    Extended profile for admin users within a school.
+
+    Includes:
+    - Admin type (School Owner, Principal, etc.)
+    - Optional organizational attributes
+    """
     admin_type = models.CharField(
         max_length=50,
         choices=AdminType.choices,
-        default=AdminType.OTHER
+        default=AdminType.OTHER,
+        help_text=_("Type of administrative role this user holds.")
     )
-    position = models.CharField(_("Position"), max_length=100, blank=True, null=True)
-    school_name = models.CharField(_("School Name"), max_length=255, blank=True, null=True)
+    position =  models.CharField(
+        _("Position"), max_length=100, blank=True, null=True
+    )
+    school_name = models.CharField(
+        _("School Name"), max_length=255, blank=True, null=True
+    )
 
     def __str__(self):
         return f"Admin ({self.admin_type}): {self.user.name or self.user.email}"
@@ -140,6 +176,10 @@ class AdminProfile(BaseProfile):
 
 
 class TeacherProfile(BaseProfile):
+    """
+    Extended teacher profile containing professional
+    and departmental information.
+    """
     staff_id = models.CharField(_("Staff ID"), max_length=50, unique=True)
     qualification = models.CharField(max_length=100, blank=True, null=True)
     specialization = models.CharField(max_length=100, blank=True, null=True)
@@ -150,19 +190,34 @@ class TeacherProfile(BaseProfile):
 
 
 class StudentProfile(BaseProfile):
+    """
+    Extended student profile used for managing
+    academic data, guardian details and admission status.
+    """
+
     student_id = models.CharField(
-        _("Student ID"), max_length=50, unique=True, blank=True, editable=False
+        _("Student ID"),
+        max_length=50,
+        unique=True,
+        blank=True,
+        editable=False,
+        help_text=_("Automatically generated student identifier.")
     )
+
     gender = models.CharField(max_length=10, choices=Gender.choices, blank=True)
-    current_class = models.CharField(max_length=20, choices=AcademicClass.choices, blank=True, null=True)
+    current_class = models.CharField(
+        max_length=20,
+        choices=AcademicClass.choices,
+        blank=True,
+        null=True
+    )
     admission_date = models.DateField(blank=True, null=True)
     guardian_name = models.CharField(max_length=100, blank=True, null=True)
     guardian_phone = models.CharField(max_length=20, blank=True, null=True)
     address = models.CharField(max_length=255, blank=True, null=True)
-    status = models.CharField(max_length=20, choices=AdmissionStatus.choices, default=AdmissionStatus.PENDING)
-    approved_by = models.CharField(max_length=100, blank=True, null=True)
 
     def save(self, *args, **kwargs):
+        """Auto-generate student ID on first save."""
         if not self.student_id:
             self.student_id = f"STD-{uuid.uuid4().hex[:8].upper()}"
         super().save(*args, **kwargs)

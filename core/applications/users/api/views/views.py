@@ -24,6 +24,12 @@ from django.utils import timezone
 
 from config.settings.base import LOGGING
 
+from core.applications.users.api.serializers.serializers import (
+    CustomUserCreateSerializer, 
+    CustomTeacherCreateSerializer, 
+    CustomUserCreateSerializer, 
+    UserSerializer,
+)
 from core.applications.users.models import User
 from core.applications.users.token import default_token_generator
 from core.helper.custom_exceptions import CustomError
@@ -32,12 +38,7 @@ from django.db.models import Q
 
 from core.applications.users.api.schemas import user_schema
 
-from .serializers import (
-    CustomAdminCreateSerializer,
-    CustomTeacherCreateSerializer,
-    CustomUserCreateSerializer,
-    UserSerializer,
-)
+
 
 
 # setup logging
