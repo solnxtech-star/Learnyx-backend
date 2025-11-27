@@ -5,7 +5,7 @@ from core.applications.timetable.models import (
     ClassSchedule,
     Timetable,
 )
-from core.applications.users.api.serializers import GetUser
+from core.applications.users.api.serializers.serializers import GetUser
 from core.applications.users.models import User
 from core.helper.enums import UserRole
 

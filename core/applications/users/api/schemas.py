@@ -1,6 +1,12 @@
-from drf_spectacular.utils import extend_schema, extend_schema_view
-from core.applications.users.api import serializers as user_serializers
-
+from drf_spectacular.utils import (
+    extend_schema,
+    extend_schema_view,
+    OpenApiParameter,
+    OpenApiTypes,
+)
+from core.applications.users.api.serializers import serializers as user_serializers
+from core.helper.enums import AdmissionStatus
+from drf_spectacular.utils import OpenApiParameter, OpenApiTypes
 
 user_schema = extend_schema_view(
     # ============================================================
@@ -49,16 +55,29 @@ user_schema = extend_schema_view(
     # USER REGISTRATION & ONBOARDING
     # ============================================================
     register_student=extend_schema(
-        summary="Register a Student",
+        summary="Student Self-Registration",
         description=(
-            "Self-service registration endpoint for students.\n"
-            "Creates a new user with the **student role** and automatically "
-            "creates a `StudentProfile`.\n\n"
-            "Uses the unified user creation + onboarding pipeline.\n"
-            "No admin privileges needed."
+            "Public onboarding endpoint for students.\n\n"
+            "This endpoint allows a student to create an account without admin access. "
+            "A new `User` is created with the **student** role, followed by the automatic creation "
+            "of a linked `StudentProfile`.\n\n"
+            "### How it Works\n"
+            "- Validates user information (email, password, names, school code, etc.)\n"
+            "- Ensures password confirmation\n"
+            "- Resolves school using `school_code`\n"
+            "- Automatically assigns the student to a `ClassRoom` (if provided)\n"
+            "- Returns the newly created user with profile data\n\n"
+            "### Permissions\n"
+            "- No authentication required.\n\n"
+            "### Notes\n"
+            "- This endpoint is part of the unified user-creation pipeline "
+            "used across all Learnxy user roles.\n"
         ),
         request=user_serializers.CustomUserCreateSerializer,
-        responses={201: user_serializers.CustomUserSerializer},
+        responses={
+            201: user_serializers.CustomUserSerializer,
+            400: OpenApiTypes.OBJECT,
+        },
     ),
     register_teacher=extend_schema(
         summary="Register a Teacher (Admin Only)",
@@ -145,17 +164,200 @@ user_schema = extend_schema_view(
             "Useful for session management, push notifications, and device audits."
         ),
     ),
-    # add_or_update_device=extend_schema(
-    #     summary="Register / Update Device",
-    #     description=(
-    #         "Registers a new device or updates an existing device record.\n\n"
-    #         "Intended for mobile apps where you store:\n"
-    #         "- Device model\n"
-    #         - OS information\n"
-    #         "- Push notification token\n\n"
-    #         "Helps with targeted push notifications and device-level security."
-    #     ),
-    #     request=user_serializers.UserSerializer.AddOrRetrieveDevice,
-    #     responses={200: user_serializers.CustomUserSerializer},
-    # ),
 )
+
+
+TYPE_PARAM = OpenApiParameter(
+    name="type",
+    location=OpenApiParameter.QUERY,
+    description=(
+        "REQUIRED. Select which type of profile to operate on.\n\n"
+        "Allowed values:\n"
+        "  • student – Manage student profiles\n"
+        "  • teacher – Manage teacher profiles\n"
+        "  • admin – Manage admin/staff profiles\n\n"
+        "Example:\n"
+        "  /api/admin/users/?type=student\n"
+        "  /api/admin/users/12/?type=teacher\n"
+        "  /api/admin/users/5/activate/?type=admin"
+    ),
+    required=True,
+    type=OpenApiTypes.STR,
+    enum=["student", "teacher", "admin"],
+)
+
+
+SEARCH_PARAM = OpenApiParameter(
+    name="search",
+    location=OpenApiParameter.QUERY,
+    description=(
+        "Search users by name or email.\n\n"
+        "Examples:\n"
+        "  /api/admin/users/?type=student&search=john\n"
+        "  /api/admin/users/?type=teacher&search=gmail.com\n"
+    ),
+    required=False,
+    type=OpenApiTypes.STR,
+)
+
+STATUS_PARAM = OpenApiParameter(
+    name="status",
+    location=OpenApiParameter.QUERY,
+    description=(
+        "Filter profiles by approval status.\n\n"
+        "Allowed values:\n"
+        f"  • {AdmissionStatus.PENDING}\n"
+        f"  • {AdmissionStatus.APPROVED}\n"
+        f"  • {AdmissionStatus.REJECTED}\n\n"
+        "Example:\n"
+        "  /api/admin/users/?type=student&status=PENDING"
+    ),
+    required=False,
+    type=OpenApiTypes.STR,
+    enum=[AdmissionStatus.PENDING, AdmissionStatus.APPROVED, AdmissionStatus.REJECTED],
+)
+
+CURRENT_CLASS_PARAM = OpenApiParameter(
+    name="current_class",
+    location=OpenApiParameter.QUERY,
+    description=(
+        "Only applies when type=student.\n"
+        "Filter students by class.\n\n"
+        "Examples:\n"
+        "  /api/admin/users/?type=student&current_class=SS1\n"
+        "  /api/admin/users/?type=student&current_class=JSS2"
+    ),
+    required=False,
+    type=OpenApiTypes.STR,
+)
+
+
+DEPARTMENT_PARAM = OpenApiParameter(
+    name="department",
+    location=OpenApiParameter.QUERY,
+    description=(
+        "Only applies when type=teacher.\n"
+        "Filter teachers by department name.\n\n"
+        "Examples:\n"
+        "  /api/admin/users/?type=teacher&department=science\n"
+        "  /api/admin/users/?type=teacher&department=mathematics"
+    ),
+    required=False,
+    type=OpenApiTypes.STR,
+)
+
+
+ORDER_PARAM = OpenApiParameter(
+    name="ordering",
+    location=OpenApiParameter.QUERY,
+    description=(
+        "Sort the results.\n"
+        "Prefix with '-' for descending order.\n\n"
+        "Common fields:\n"
+        "  • user__name\n"
+        "  • user__email\n"
+        "  • admission_date\n"
+        "  • student_id (students)\n"
+        "  • staff_id (teachers)\n\n"
+        "Examples:\n"
+        "  /api/admin/users/?type=student&ordering=user__name\n"
+        "  /api/admin/users/?type=teacher&ordering=-admission_date"
+    ),
+    required=False,
+    type=OpenApiTypes.STR,
+)
+
+
+def LIST_SCHEMA():
+    return dict(
+        parameters=[
+            TYPE_PARAM,
+            SEARCH_PARAM,
+            STATUS_PARAM,
+            CURRENT_CLASS_PARAM,
+            DEPARTMENT_PARAM,
+            ORDER_PARAM,
+        ],
+        summary="List Profiles",
+        description=(
+            "List all profiles for the selected type.\n\n"
+            "REQUIRED QUERY PARAM:\n"
+            "  ?type=student | teacher | admin\n\n"
+            "Optional filters:\n"
+            "  • ?search=john\n"
+            "  • ?status=PENDING\n"
+            "  • ?current_class=SS1 (only for students)\n"
+            "  • ?department=science (only for teachers)\n"
+            "  • ?ordering=user__name\n\n"
+            "Examples:\n"
+            "  GET /api/admin/users/?type=student\n"
+            "  GET /api/admin/users/?type=teacher&search=ada\n"
+            "  GET /api/admin/users/?type=student&status=PENDING&ordering=-admission_date"
+        ),
+    )
+
+
+def RETRIEVE_SCHEMA():
+    return dict(
+        parameters=[TYPE_PARAM],
+        summary="Retrieve a Profile",
+        description=(
+            "Retrieve a single profile by ID.\n\n"
+            "REQUIRED QUERY PARAM:\n"
+            "  ?type=student | teacher | admin\n\n"
+            "Examples:\n"
+            "  GET /api/admin/users/12/?type=student\n"
+            "  GET /api/admin/users/7/?type=teacher"
+        ),
+    )
+
+
+def ACTIVATE_SCHEMA():
+    return dict(
+        parameters=[TYPE_PARAM],
+        summary="Activate or Reject a Profile",
+        description=(
+            "Approve or reject a profile.\n\n"
+            "REQUIRED QUERY PARAM:\n"
+            "  ?type=student | teacher | admin\n\n"
+            "POST BODY EXAMPLE:\n"
+            "{\n"
+            '  "action": "approve",  // or reject\n'
+            '  "reason": "Documents verified"\n'
+            "}\n\n"
+            "Examples:\n"
+            "  POST /api/admin/users/12/activate/?type=student\n"
+            "  POST /api/admin/users/8/activate/?type=teacher"
+        ),
+    )
+
+classroom_create_schema = extend_schema(
+        summary="Create a Classroom",
+        description=(
+            "Creates a new classroom for the authenticated admin's school.\n\n"
+            "### Example Body\n"
+            "```\n"
+            "{\n"
+            "  \"academic_class\": \"JSS1\",\n"
+            "  \"arm\": \"A\"\n"
+            "}\n"
+            "```\n"
+            "### Notes\n"
+            "- School is automatically assigned.\n"
+            "- Uniqueness is enforced per school.\n"
+        )
+    )
+
+classroom_update_schema = extend_schema(
+        summary="Update a Classroom",
+        description=(
+            "Modifies an existing classroom belonging to the admin's school.\n\n"
+            "### Example Body\n"
+            "```\n"
+            "{\n"
+            "  \"academic_class\": \"JSS2\",\n"
+            "  \"arm\": \"B\"\n"
+            "}\n"
+            "```\n"
+        )
+    )
