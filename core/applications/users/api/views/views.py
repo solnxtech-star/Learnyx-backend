@@ -1,45 +1,46 @@
-from smtplib import SMTPRecipientsRefused
 import logging
-from django.contrib.auth import logout, update_session_auth_hash, user_logged_out
+from smtplib import SMTPRecipientsRefused
+
+from django.contrib.auth import logout
+from django.contrib.auth import update_session_auth_hash
+from django.contrib.auth import user_logged_out
 from django.utils.module_loading import import_string
 from django.utils.timezone import now
-from djoser import signals, utils
+from djoser import signals
+from djoser import utils
 from djoser.compat import get_user_email
 from djoser.conf import settings
 from djoser.email import ActivationEmail
 from drf_spectacular.utils import extend_schema
-from rest_framework import generics, status
+from rest_framework import generics
+from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
-from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.parsers import FormParser
+from rest_framework.parsers import JSONParser
+from rest_framework.parsers import MultiPartParser
+from rest_framework.permissions import AllowAny
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
-from rest_framework_simplejwt.authentication import AUTH_HEADER_TYPES, JWTAuthentication
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework.viewsets import ModelViewSet
+from rest_framework_simplejwt.authentication import AUTH_HEADER_TYPES
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import InvalidToken
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.settings import api_settings
-from rest_framework.permissions import AllowAny
-from django.utils import timezone
 
-from config.settings.base import LOGGING
-
+from core.applications.users.api.schemas import user_schema
 from core.applications.users.api.serializers.serializers import (
-    CustomUserCreateSerializer, 
-    CustomTeacherCreateSerializer, 
-    CustomUserCreateSerializer, 
-    UserSerializer,
+    CustomTeacherCreateSerializer,
 )
+from core.applications.users.api.serializers.serializers import (
+    CustomUserCreateSerializer,
+)
+from core.applications.users.api.serializers.serializers import UserSerializer
 from core.applications.users.models import User
 from core.applications.users.token import default_token_generator
 from core.helper.custom_exceptions import CustomError
-from rest_framework import permissions
-from django.db.models import Q
-
-from core.applications.users.api.schemas import user_schema
-
-
-
 
 # setup logging
 logger = logging.getLogger(__name__)
@@ -171,7 +172,6 @@ class TokenBlacklistView(TokenViewBase):
 
 
 token_blacklist = TokenBlacklistView.as_view()
-
 
 
 @user_schema
@@ -356,7 +356,7 @@ class UserViewSet(ModelViewSet):
         except SMTPRecipientsRefused as smtp_error:
             logger.error("SMTPRecipientsRefused: %s", smtp_error)
             raise CustomError.EmailSendError(
-                "Unable to send email. Please contact support."
+                "Unable to send email. Please contact support.",
             )
 
     @action(
@@ -544,7 +544,6 @@ class UserViewSet(ModelViewSet):
 
     @action(["post"], detail=False)
     def resend_activation(self, request, *args, **kwargs):
-
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.get_user(is_active=False)

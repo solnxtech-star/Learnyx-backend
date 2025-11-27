@@ -1,18 +1,22 @@
+import secrets
+import uuid
 from typing import ClassVar
+
+import auto_prefetch
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
-from django.conf import settings
 
+from core.helper.enums import AcademicClass
+from core.helper.enums import AdminType
+from core.helper.enums import AdmissionStatus
+from core.helper.enums import Gender
+from core.helper.enums import UserRole
 from core.helper.models import TimeStampedModel
-from core.helper.enums import AdminType, UserRole, Gender, AcademicClass, AdmissionStatus
+
 from .managers import UserManager
-
-import auto_prefetch
-import uuid
-import secrets
-
 
 
 class School(models.Model):
@@ -35,8 +39,6 @@ class School(models.Model):
     address = models.CharField(max_length=255, blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
-    
 
     def __str__(self):
         return self.name
@@ -66,13 +68,16 @@ class User(AbstractUser):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="users"
+        related_name="users",
     )
 
     name = models.CharField(_("Full Name"), max_length=255, blank=True)
     email = models.EmailField(_("Email Address"), unique=True)
     phone_number = models.CharField(
-        _("Phone Number"), max_length=20, blank=True, null=True
+        _("Phone Number"),
+        max_length=20,
+        blank=True,
+        null=True,
     )
 
     role = models.CharField(
@@ -105,7 +110,6 @@ class User(AbstractUser):
         return f"{self.email} ({self.get_role_display()})"
 
 
-
 class BaseProfile(TimeStampedModel):
     """
     Abstract base profile shared by all role-specific profile models.
@@ -127,14 +131,14 @@ class BaseProfile(TimeStampedModel):
         max_length=20,
         choices=AdmissionStatus.choices,
         default=AdmissionStatus.PENDING,
-        help_text=_("Approval status for this profile.")
+        help_text=_("Approval status for this profile."),
     )
 
     approved_by = models.CharField(
         max_length=100,
         blank=True,
         null=True,
-        help_text=_("Email of the admin who approved or rejected this profile.")
+        help_text=_("Email of the admin who approved or rejected this profile."),
     )
 
     @property
@@ -146,8 +150,6 @@ class BaseProfile(TimeStampedModel):
         abstract = True
 
 
-
-
 class AdminProfile(BaseProfile):
     """
     Extended profile for admin users within a school.
@@ -156,23 +158,28 @@ class AdminProfile(BaseProfile):
     - Admin type (School Owner, Principal, etc.)
     - Optional organizational attributes
     """
+
     admin_type = models.CharField(
         max_length=50,
         choices=AdminType.choices,
         default=AdminType.OTHER,
-        help_text=_("Type of administrative role this user holds.")
+        help_text=_("Type of administrative role this user holds."),
     )
-    position =  models.CharField(
-        _("Position"), max_length=100, blank=True, null=True
+    position = models.CharField(
+        _("Position"),
+        max_length=100,
+        blank=True,
+        null=True,
     )
     school_name = models.CharField(
-        _("School Name"), max_length=255, blank=True, null=True
+        _("School Name"),
+        max_length=255,
+        blank=True,
+        null=True,
     )
 
     def __str__(self):
         return f"Admin ({self.admin_type}): {self.user.name or self.user.email}"
-
-
 
 
 class TeacherProfile(BaseProfile):
@@ -180,6 +187,7 @@ class TeacherProfile(BaseProfile):
     Extended teacher profile containing professional
     and departmental information.
     """
+
     classroom = auto_prefetch.ForeignKey(
         "academics.ClassRoom",
         on_delete=models.SET_NULL,
@@ -202,12 +210,13 @@ class StudentProfile(BaseProfile):
     Extended student profile used for managing
     academic data, guardian details and admission status.
     """
+
     classroom = auto_prefetch.ForeignKey(
         "academics.ClassRoom",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="students"
+        related_name="students",
     )
     student_id = models.CharField(
         _("Student ID"),
@@ -215,7 +224,7 @@ class StudentProfile(BaseProfile):
         unique=True,
         blank=True,
         editable=False,
-        help_text=_("Automatically generated student identifier.")
+        help_text=_("Automatically generated student identifier."),
     )
 
     gender = models.CharField(max_length=10, choices=Gender.choices, blank=True)
@@ -223,7 +232,7 @@ class StudentProfile(BaseProfile):
         max_length=20,
         choices=AcademicClass.choices,
         blank=True,
-        null=True
+        null=True,
     )
     admission_date = models.DateField(blank=True, null=True)
     guardian_name = models.CharField(max_length=100, blank=True, null=True)

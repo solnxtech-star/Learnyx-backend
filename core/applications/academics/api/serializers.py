@@ -1,11 +1,13 @@
 from rest_framework import serializers
+
 from core.applications.academics.models import ClassRoom
-from core.applications.users.models import TeacherProfile
+
 
 class AssignClassRoomSerializer(serializers.Serializer):
     """
     Used by admin to assign or update a teacher's classroom.
     """
+
     classroom_id = serializers.UUIDField(required=True)
 
     def validate_classroom_id(self, classroom_id):
@@ -14,7 +16,7 @@ class AssignClassRoomSerializer(serializers.Serializer):
 
         classroom = ClassRoom.objects.filter(
             id=classroom_id,
-            school=user_school
+            school=user_school,
         ).first()
 
         if not classroom:

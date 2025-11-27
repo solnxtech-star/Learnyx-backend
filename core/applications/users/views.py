@@ -2,16 +2,15 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.messages.views import SuccessMessageMixin
 from django.db.models import QuerySet
 from django.urls import reverse
+from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
+from django.views.generic import CreateView
 from django.views.generic import DetailView
 from django.views.generic import RedirectView
 from django.views.generic import UpdateView
-from django.views.generic import CreateView
 
 from core.applications.users.forms import SuperCustomUserCreationForm
 from core.applications.users.models import User
-from django.urls import reverse_lazy
-
 
 
 class UserDetailView(LoginRequiredMixin, DetailView):
@@ -49,11 +48,12 @@ class UserRedirectView(LoginRequiredMixin, RedirectView):
 
 user_redirect_view = UserRedirectView.as_view()
 
+
 class SuperUserSignupView(CreateView):
     model = User
     form_class = SuperCustomUserCreationForm
     template_name = "users/superuser_signup.html"
-    success_url = reverse_lazy('admin:login')
+    success_url = reverse_lazy("admin:login")
 
 
 superuser_signup = SuperUserSignupView.as_view()

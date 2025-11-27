@@ -6,7 +6,10 @@ from django.utils.translation import gettext_lazy as _
 
 from .forms import UserAdminChangeForm
 from .forms import UserAdminCreationForm
-from .models import User, AdminProfile, TeacherProfile, StudentProfile, ParentProfile, School
+from .models import School
+from .models import StudentProfile
+from .models import TeacherProfile
+from .models import User
 
 if settings.DJANGO_ADMIN_FORCE_ALLAUTH:
     # Force the `admin` sign in process to go through the `django-allauth` workflow:
@@ -36,7 +39,7 @@ class UserAdmin(auth_admin.UserAdmin):
         ),
         (_("Important dates"), {"fields": ("last_login",)}),
     )
-    list_display = ["id", "email", "name",  "role", "is_superuser"]
+    list_display = ["id", "email", "name", "role", "is_superuser"]
     search_fields = ["name"]
     ordering = ["id"]
     add_fieldsets = (
@@ -56,14 +59,22 @@ class StudentProfileAdmin(admin.ModelAdmin):
     search_fields = ["student_id", "user__email", "user__name"]
     ordering = ["id"]
 
+
 @admin.register(TeacherProfile)
 class TeacherProfileAdmin(admin.ModelAdmin):
-    list_display = ["id", "user", "staff_id", "qualification", "specialization", "department"]
+    list_display = [
+        "id",
+        "user",
+        "staff_id",
+        "qualification",
+        "specialization",
+        "department",
+    ]
     search_fields = ["staff_id", "user__email", "user__name"]
     list_filter = ["department", "specialization"]
     ordering = ["id"]
-    
-    
+
+
 @admin.register(School)
 class SchoolAdmin(admin.ModelAdmin):
     list_display = ["id", "name", "slug", "school_code"]

@@ -5,7 +5,9 @@ import ssl
 from pathlib import Path
 
 import environ
-from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAdminUser
+from rest_framework.permissions import IsAuthenticated
 
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent.parent
 # core/
@@ -18,7 +20,6 @@ if READ_DOT_ENV_FILE:
     env.read_env(str(BASE_DIR / ".env"))
 
 from datetime import timedelta
-
 
 # GENERAL
 # ------------------------------------------------------------------------------
@@ -91,8 +92,8 @@ THIRD_PARTY_APPS = [
 
 LOCAL_APPS = [
     "core.applications.users",
-     "core.applications.timetable", 
-     "core.applications.academics", 
+    "core.applications.timetable",
+    "core.applications.academics",
     # Your stuff: custom apps go here
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
@@ -353,7 +354,6 @@ CORS_URLS_REGEX = r"^/api/.*$"
 CORS_ALLOWED_ORIGINS = [
     "https://learnyx.vercel.app",
     "http://localhost:5173",
-    
 ]
 
 # By Default swagger ui is available only to admin user(s). You can change permission classes to change that

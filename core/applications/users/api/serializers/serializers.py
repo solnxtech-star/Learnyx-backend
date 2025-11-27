@@ -1,5 +1,5 @@
-import uuid
 import contextlib
+import uuid
 from typing import Literal
 
 from django.contrib.auth import authenticate
@@ -7,6 +7,7 @@ from django.contrib.auth import user_logged_in
 from django.contrib.auth.models import update_last_login
 from django.contrib.auth.password_validation import validate_password
 from django.core import exceptions as django_exceptions
+from django.db import transaction
 from djoser.compat import get_user_email
 from djoser.conf import settings
 from djoser.serializers import UserCreateSerializer
@@ -15,27 +16,20 @@ from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.exceptions import PermissionDenied
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.settings import api_settings
-from django.db import transaction
-from math import radians, cos, sin, asin, sqrt
+
 from core.applications.academics.models import ClassRoom
-
-
-from core.applications.users.models import (
-    AdminProfile,
-    School,
-    StudentProfile,
-    TeacherProfile,
-    User,
-)
+from core.applications.users.models import AdminProfile
+from core.applications.users.models import School
+from core.applications.users.models import StudentProfile
+from core.applications.users.models import TeacherProfile
+from core.applications.users.models import User
 from core.applications.users.token import default_token_generator
 from core.helper.custom_exceptions import CustomError
-from core.helper.enums import (
-    AcademicClass,
-    AdminType,
-    AdmissionStatus,
-    Gender,
-    UserRole,
-)
+from core.helper.enums import AcademicClass
+from core.helper.enums import AdminType
+from core.helper.enums import AdmissionStatus
+from core.helper.enums import Gender
+from core.helper.enums import UserRole
 from core.helper.interface import BaseModelNoDefs
 
 
@@ -176,8 +170,8 @@ class BaseRoleCreateSerializer(UserCreateSerializer):
             else:
                 raise CustomError.BadRequest(
                     {
-                        "school": "Provide either school_id (owner) or school_code (admin)."
-                    }
+                        "school": "Provide either school_id (owner) or school_code (admin).",
+                    },
                 )
 
         # Save user fields
@@ -204,9 +198,8 @@ class BaseRoleCreateSerializer(UserCreateSerializer):
                 profile_data["classroom"] = classroom
 
             # Auto-generate staff ID for teachers
-            if (
-                self.profile_model.__name__ == "TeacherProfile"
-                and not profile_data.get("staff_id")
+            if self.profile_model.__name__ == "TeacherProfile" and not profile_data.get(
+                "staff_id",
             ):
                 profile_data["staff_id"] = f"STF-{uuid.uuid4().hex[:8].upper()}"
 
@@ -221,6 +214,7 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
     Student signup serializer.
     Adds academic fields and classroom assignment.
     """
+
     role = UserRole.STUDENT
     profile_model = StudentProfile
 
@@ -235,14 +229,18 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
 
     gender = serializers.ChoiceField(choices=Gender.choices, required=False)
     current_class = serializers.ChoiceField(
-        choices=AcademicClass.choices, required=False
+        choices=AcademicClass.choices,
+        required=False,
     )
     guardian_name = serializers.CharField(required=False, allow_blank=True)
     guardian_phone = serializers.CharField(required=False, allow_blank=True)
     address = serializers.CharField(required=False, allow_blank=True)
 
-    classroom_id = serializers.CharField(write_only=True, required=False, allow_blank=True)
-
+    classroom_id = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+    )
 
     school_code = serializers.CharField(write_only=True, required=True)
 
@@ -255,7 +253,6 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
             "address",
             "classroom_id",
         )
-
 
 
 class CustomTeacherCreateSerializer(BaseRoleCreateSerializer):
@@ -327,9 +324,7 @@ class OSVersionSchema(BaseModelNoDefs):
 
 
 class UserDeviceInfoSchema(BaseModelNoDefs):
-    osName: Literal["Android", "android", "iOS", "ios", "web", "Web"] | None = (
-        None  # noqa: N815
-    )
+    osName: Literal["Android", "android", "iOS", "ios", "web", "Web"] | None = None
     modelName: str | None = None  # noqa: N815
     osVersion: str | None = None  # noqa: N815
 
