@@ -1,4 +1,5 @@
 from drf_spectacular.utils import extend_schema
+
 from core.applications.academics.api.serializers import AssignClassRoomSerializer
 from core.applications.users.api.serializers.serializers import TeacherProfileSerializer
 
@@ -10,7 +11,7 @@ assign_teacher_classroom_schema = extend_schema(
         "### Example Body\n"
         "```\n"
         "{\n"
-        "  \"classroom_id\": \"4a3b1c4e-12ab-44cd-93ab-ae29fefd11e3\"\n"
+        '  "classroom_id": "4a3b1c4e-12ab-44cd-93ab-ae29fefd11e3"\n'
         "}\n"
         "```\n"
         "### Notes\n"
@@ -20,6 +21,4 @@ assign_teacher_classroom_schema = extend_schema(
     ),
     request=AssignClassRoomSerializer,
     responses={200: TeacherProfileSerializer},
-    
 )
-

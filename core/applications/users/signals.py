@@ -1,17 +1,15 @@
 import uuid
+
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from django.conf import settings
 
-from core.applications.users.models import (
-    AdminProfile,
-    TeacherProfile,
-    StudentProfile,
-    ParentProfile,
-    User,
-)
-from core.helper.enums import UserRole, AdmissionStatus
-
+from core.applications.users.models import AdminProfile
+from core.applications.users.models import ParentProfile
+from core.applications.users.models import StudentProfile
+from core.applications.users.models import TeacherProfile
+from core.applications.users.models import User
+from core.helper.enums import AdmissionStatus
+from core.helper.enums import UserRole
 
 # Mapping user roles to their respective profile models
 ROLE_PROFILE_MAP = {

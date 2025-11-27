@@ -1,10 +1,9 @@
 from rest_framework import serializers
-from core.applications.timetable.models import (
-    Subject,
-    TimeSlot,
-    ClassSchedule,
-    Timetable,
-)
+
+from core.applications.timetable.models import ClassSchedule
+from core.applications.timetable.models import Subject
+from core.applications.timetable.models import TimeSlot
+from core.applications.timetable.models import Timetable
 from core.applications.users.api.serializers.serializers import GetUser
 from core.applications.users.models import User
 from core.helper.enums import UserRole
@@ -12,7 +11,7 @@ from core.helper.enums import UserRole
 
 class SubjectSerializer(serializers.ModelSerializer):
     """Serializer for Subject model"""
-    
+
     class Meta:
         model = Subject
         fields = [
@@ -29,7 +28,7 @@ class SubjectSerializer(serializers.ModelSerializer):
 
 class TimeSlotSerializer(serializers.ModelSerializer):
     """Serializer for TimeSlot model"""
-    
+
     class Meta:
         model = TimeSlot
         fields = [
@@ -47,31 +46,31 @@ class TimeSlotSerializer(serializers.ModelSerializer):
 
 class ClassScheduleSerializer(serializers.ModelSerializer):
     """Serializer for ClassSchedule model with nested relations"""
-    
+
     subject = SubjectSerializer(read_only=True)
     time_slot = TimeSlotSerializer(read_only=True)
     teacher = GetUser(read_only=True)
-    
+
     subject_id = serializers.PrimaryKeyRelatedField(
         queryset=Subject.objects.filter(is_active=True),
-        source='subject',
+        source="subject",
         write_only=True,
         required=False,
-        allow_null=True
+        allow_null=True,
     )
     time_slot_id = serializers.PrimaryKeyRelatedField(
         queryset=TimeSlot.objects.all(),
-        source='time_slot',
-        write_only=True
+        source="time_slot",
+        write_only=True,
     )
     teacher_id = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.filter(role=UserRole.TEACHER),
-        source='teacher',
+        source="teacher",
         write_only=True,
         required=False,
-        allow_null=True
+        allow_null=True,
     )
-    
+
     class Meta:
         model = ClassSchedule
         fields = [
@@ -95,15 +94,15 @@ class ClassScheduleSerializer(serializers.ModelSerializer):
 
 class ClassScheduleListSerializer(serializers.ModelSerializer):
     """Simplified serializer for listing schedules"""
-    
-    subject_name = serializers.CharField(source='subject.name', read_only=True)
-    subject_code = serializers.CharField(source='subject.code', read_only=True)
+
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    subject_code = serializers.CharField(source="subject.code", read_only=True)
     teacher_name = serializers.SerializerMethodField()
-    time_slot_name = serializers.CharField(source='time_slot.name', read_only=True)
-    start_time = serializers.TimeField(source='time_slot.start_time', read_only=True)
-    end_time = serializers.TimeField(source='time_slot.end_time', read_only=True)
-    is_break = serializers.BooleanField(source='time_slot.is_break', read_only=True)
-    
+    time_slot_name = serializers.CharField(source="time_slot.name", read_only=True)
+    start_time = serializers.TimeField(source="time_slot.start_time", read_only=True)
+    end_time = serializers.TimeField(source="time_slot.end_time", read_only=True)
+    is_break = serializers.BooleanField(source="time_slot.is_break", read_only=True)
+
     class Meta:
         model = ClassSchedule
         fields = [
@@ -120,16 +119,16 @@ class ClassScheduleListSerializer(serializers.ModelSerializer):
             "room_number",
             "notes",
         ]
-    
+
     def get_teacher_name(self, obj):
         return obj.teacher.get_full_name() if obj.teacher else None
 
 
 class StudentTimetableSerializer(serializers.ModelSerializer):
     """Serializer for student's weekly timetable view"""
-    
+
     schedules = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = Timetable
         fields = [
@@ -141,39 +140,43 @@ class StudentTimetableSerializer(serializers.ModelSerializer):
             "end_date",
             "schedules",
         ]
-    
+
     def get_schedules(self, obj):
         # Get student's class from context
-        request = self.context.get('request')
-        if not request or not hasattr(request.user, 'studentprofile'):
+        request = self.context.get("request")
+        if not request or not hasattr(request.user, "studentprofile"):
             return []
-        
+
         student_class = request.user.studentprofile.current_class
-        
+
         # Get schedules for student's class
-        schedules = obj.schedules.filter(
-            academic_class=student_class,
-            is_active=True
-        ).select_related('subject', 'teacher', 'time_slot').order_by(
-            'day_of_week',
-            'time_slot__order'
+        schedules = (
+            obj.schedules.filter(
+                academic_class=student_class,
+                is_active=True,
+            )
+            .select_related("subject", "teacher", "time_slot")
+            .order_by(
+                "day_of_week",
+                "time_slot__order",
+            )
         )
-        
+
         return ClassScheduleListSerializer(schedules, many=True).data
 
 
 class TimetableSerializer(serializers.ModelSerializer):
     """Full serializer for Timetable model"""
-    
+
     schedules = ClassScheduleListSerializer(many=True, read_only=True)
     schedule_ids = serializers.PrimaryKeyRelatedField(
         queryset=ClassSchedule.objects.all(),
-        source='schedules',
+        source="schedules",
         write_only=True,
         many=True,
-        required=False
+        required=False,
     )
-    
+
     class Meta:
         model = Timetable
         fields = [

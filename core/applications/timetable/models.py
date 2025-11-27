@@ -1,35 +1,39 @@
+import auto_prefetch
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+
+from core.helper.enums import AcademicClass
+from core.helper.enums import DayOfWeek
+from core.helper.enums import UserRole
 from core.helper.models import TimeStampedModel
-from core.helper.enums import AcademicClass, DayOfWeek, UserRole
-import auto_prefetch
 
 
 class Subject(TimeStampedModel):
     """
     Represents a subject/course taught in the school.
     """
+
     name = models.CharField(
         max_length=100,
         verbose_name=_("Subject Name"),
-        help_text=_("Name of the subject (e.g., Mathematics, Physics)")
+        help_text=_("Name of the subject (e.g., Mathematics, Physics)"),
     )
     code = models.CharField(
         max_length=20,
         unique=True,
         verbose_name=_("Subject Code"),
-        help_text=_("Unique code for the subject (e.g., MATH101)")
+        help_text=_("Unique code for the subject (e.g., MATH101)"),
     )
     description = models.TextField(
         blank=True,
         null=True,
         verbose_name=_("Description"),
-        help_text=_("Brief description of the subject")
+        help_text=_("Brief description of the subject"),
     )
     is_active = models.BooleanField(
         default=True,
         verbose_name=_("Is Active"),
-        help_text=_("Whether this subject is currently being taught")
+        help_text=_("Whether this subject is currently being taught"),
     )
 
     class Meta(auto_prefetch.Model.Meta):
@@ -46,26 +50,27 @@ class TimeSlot(TimeStampedModel):
     """
     Represents a specific time period in the school day.
     """
+
     name = models.CharField(
         max_length=50,
         verbose_name=_("Period Name"),
-        help_text=_("E.g., 'Period 1', 'Break', 'Lunch'")
+        help_text=_("E.g., 'Period 1', 'Break', 'Lunch'"),
     )
     start_time = models.TimeField(
-        verbose_name=_("Start Time")
+        verbose_name=_("Start Time"),
     )
     end_time = models.TimeField(
-        verbose_name=_("End Time")
+        verbose_name=_("End Time"),
     )
     is_break = models.BooleanField(
         default=False,
         verbose_name=_("Is Break Period"),
-        help_text=_("Check if this is a break/lunch period")
+        help_text=_("Check if this is a break/lunch period"),
     )
     order = models.PositiveIntegerField(
         default=0,
         verbose_name=_("Display Order"),
-        help_text=_("Order in which periods appear in the day")
+        help_text=_("Order in which periods appear in the day"),
     )
 
     class Meta(auto_prefetch.Model.Meta):
@@ -82,22 +87,23 @@ class ClassSchedule(TimeStampedModel):
     """
     Represents a single class session in the timetable.
     """
+
     academic_class = models.CharField(
         max_length=50,
         choices=AcademicClass.choices,
         verbose_name=_("Class"),
-        help_text=_("Which class this schedule is for")
+        help_text=_("Which class this schedule is for"),
     )
     day_of_week = models.CharField(
         max_length=20,
         choices=DayOfWeek.choices,
-        verbose_name=_("Day of Week")
+        verbose_name=_("Day of Week"),
     )
     time_slot = auto_prefetch.ForeignKey(
         TimeSlot,
         on_delete=models.CASCADE,
         related_name="schedules",
-        verbose_name=_("Time Slot")
+        verbose_name=_("Time Slot"),
     )
     subject = auto_prefetch.ForeignKey(
         Subject,
@@ -106,7 +112,7 @@ class ClassSchedule(TimeStampedModel):
         verbose_name=_("Subject"),
         null=True,
         blank=True,
-        help_text=_("Leave blank for break periods")
+        help_text=_("Leave blank for break periods"),
     )
     teacher = auto_prefetch.ForeignKey(
         "users.User",
@@ -116,25 +122,25 @@ class ClassSchedule(TimeStampedModel):
         limit_choices_to={"role": UserRole.TEACHER},
         related_name="teaching_schedules",
         verbose_name=_("Teacher"),
-        help_text=_("Teacher assigned to this class")
+        help_text=_("Teacher assigned to this class"),
     )
     room_number = models.CharField(
         max_length=50,
         blank=True,
         null=True,
         verbose_name=_("Room Number"),
-        help_text=_("Classroom or lab number")
+        help_text=_("Classroom or lab number"),
     )
     is_active = models.BooleanField(
         default=True,
         verbose_name=_("Is Active"),
-        help_text=_("Whether this schedule is currently in effect")
+        help_text=_("Whether this schedule is currently in effect"),
     )
     notes = models.TextField(
         blank=True,
         null=True,
         verbose_name=_("Notes"),
-        help_text=_("Additional notes or instructions")
+        help_text=_("Additional notes or instructions"),
     )
 
     class Meta(auto_prefetch.Model.Meta):
@@ -152,16 +158,20 @@ class ClassSchedule(TimeStampedModel):
 
     def clean(self):
         from django.core.exceptions import ValidationError
-        
+
         # Validate teacher role
         if self.teacher and self.teacher.role != UserRole.TEACHER:
-            raise ValidationError(_("Only users with 'Teacher' role can be assigned to schedules."))
-        
+            raise ValidationError(
+                _("Only users with 'Teacher' role can be assigned to schedules."),
+            )
+
         # If it's a break period, subject and teacher should be null
         if self.time_slot and self.time_slot.is_break:
             if self.subject is not None or self.teacher is not None:
-                raise ValidationError(_("Break periods cannot have subjects or teachers assigned."))
-        
+                raise ValidationError(
+                    _("Break periods cannot have subjects or teachers assigned."),
+                )
+
         # If it's not a break, subject is required
         if self.time_slot and not self.time_slot.is_break and not self.subject:
             raise ValidationError(_("Non-break periods must have a subject assigned."))
@@ -171,37 +181,38 @@ class Timetable(TimeStampedModel):
     """
     Represents a complete timetable for a specific academic period.
     """
+
     name = models.CharField(
         max_length=100,
         verbose_name=_("Timetable Name"),
-        help_text=_("E.g., 'Fall 2024 Timetable'")
+        help_text=_("E.g., 'Fall 2024 Timetable'"),
     )
     academic_year = models.CharField(
         max_length=20,
         verbose_name=_("Academic Year"),
-        help_text=_("E.g., '2024-2025'")
+        help_text=_("E.g., '2024-2025'"),
     )
     term = models.CharField(
         max_length=50,
         verbose_name=_("Term/Semester"),
-        help_text=_("E.g., 'Fall Semester', 'First Term'")
+        help_text=_("E.g., 'Fall Semester', 'First Term'"),
     )
     start_date = models.DateField(
-        verbose_name=_("Start Date")
+        verbose_name=_("Start Date"),
     )
     end_date = models.DateField(
-        verbose_name=_("End Date")
+        verbose_name=_("End Date"),
     )
     is_active = models.BooleanField(
         default=True,
         verbose_name=_("Is Active"),
-        help_text=_("Only one timetable should be active at a time")
+        help_text=_("Only one timetable should be active at a time"),
     )
     schedules = models.ManyToManyField(
         ClassSchedule,
         related_name="timetables",
         verbose_name=_("Class Schedules"),
-        help_text=_("All schedules included in this timetable")
+        help_text=_("All schedules included in this timetable"),
     )
 
     class Meta(auto_prefetch.Model.Meta):
@@ -216,5 +227,7 @@ class Timetable(TimeStampedModel):
     def save(self, *args, **kwargs):
         # Ensure only one active timetable
         if self.is_active:
-            Timetable.objects.filter(is_active=True).exclude(pk=self.pk).update(is_active=False)
+            Timetable.objects.filter(is_active=True).exclude(pk=self.pk).update(
+                is_active=False,
+            )
         super().save(*args, **kwargs)

@@ -9,7 +9,6 @@ from django.db.models import QuerySet
 from model_utils import FieldTracker
 
 
-
 def generate_uuid() -> str:
     """Generate a unique 32-character hexadecimal UUID string."""
     return uuid.uuid4().hex

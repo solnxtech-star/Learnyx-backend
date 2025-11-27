@@ -1,11 +1,11 @@
-from django.urls import path, include
+from django.urls import include
+from django.urls import path
 from rest_framework.routers import DefaultRouter
-from core.applications.timetable.api.views import (
-    SubjectViewSet,
-    TimeSlotViewSet,
-    ClassScheduleViewSet,
-    TimetableViewSet,
-)
+
+from core.applications.timetable.api.views import ClassScheduleViewSet
+from core.applications.timetable.api.views import SubjectViewSet
+from core.applications.timetable.api.views import TimeSlotViewSet
+from core.applications.timetable.api.views import TimetableViewSet
 
 app_name = "timetable"
 
