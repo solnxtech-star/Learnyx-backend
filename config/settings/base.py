@@ -92,6 +92,7 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     "core.applications.users",
      "core.applications.timetable", 
+     "core.applications.academics", 
     # Your stuff: custom apps go here
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
@@ -341,10 +342,19 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # paginations
+    "DEFAULT_PAGINATION_CLASS": "core.helper.paginations.DefaultPagination",
+    "PAGE_SIZE": 20,
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
 # django-cors-headers - https://github.com/adamchainz/django-cors-headers#setup
 CORS_URLS_REGEX = r"^/api/.*$"
+CORS_ALLOWED_ORIGINS = [
+    "https://learnyx.vercel.app",
+    "http://localhost:5173",
+    
+]
 
 # By Default swagger ui is available only to admin user(s). You can change permission classes to change that
 # See more configuration options at https://drf-spectacular.readthedocs.io/en/latest/settings.html#settings
@@ -360,15 +370,15 @@ SPECTACULAR_SETTINGS = {
 
 DJOSER = {
     "SERIALIZERS": {
-        "user_create": "core.applications.users.api.serializers.CustomUserCreateSerializer",
-        "user": "core.applications.users.api.serializers.CustomUserSerializer",
-        "current_user": "core.applications.users.api.serializers.GetUser",
-        "password_reset_confirm": "core.applications.users.api.serializers.PasswordResetConfirmSerializer",
-        "password_reset_confirm_retype": "core.applications.users.api.serializers.PasswordResetConfirmRetypeSerializer",
+        "user_create": "core.applications.users.api.serializers.serializers.CustomUserCreateSerializer",
+        "user": "core.applications.users.api.serializers.serializers.CustomUserSerializer",
+        "current_user": "core.applications.users.api.serializers.serializers.GetUser",
+        "password_reset_confirm": "core.applications.users.api.serializers.serializers.PasswordResetConfirmSerializer",
+        "password_reset_confirm_retype": "core.applications.users.api.serializers.serializers.PasswordResetConfirmRetypeSerializer",
         "username_reset": "djoser.serializers.SendEmailResetSerializer",
-        "username_reset_confirm": "core.applications.users.api.serializers.UsernameResetConfirmSerializer",
-        "username_reset_confirm_retype": "core.applications.users.api.serializers.UsernameResetConfirmRetypeSerializer",
-        "activation": "core.applications.users.api.serializers.ActivationSerializer",
+        "username_reset_confirm": "core.applications.users.api.serializers.serializers.UsernameResetConfirmSerializer",
+        "username_reset_confirm_retype": "core.applications.users.api.serializers.serializers.UsernameResetConfirmRetypeSerializer",
+        "activation": "core.applications.users.api.serializers.serializers.ActivationSerializer",
     },
     "PASSWORD_RESET_CONFIRM_URL": "password/reset/confirm/{uid}/{token}",
     "ACTIVATION_URL": "activate/{uid}/{token}",
@@ -412,7 +422,7 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
     "ACCESS_TOKEN_LIFETIME": timedelta(days=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=160),
-    "TOKEN_OBTAIN_SERIALIZER": "core.applications.users.api.serializers.CustomTokenObtainPairSerializer",
+    "TOKEN_OBTAIN_SERIALIZER": "core.applications.users.api.serializers.serializers.CustomTokenObtainPairSerializer",
 }
 
 
@@ -420,3 +430,5 @@ SIMPLE_JWT = {
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:8000")
 
 TEST_MODE = env.bool("DJANGO_TEST_MODE", default=False)
+
+API_VERSION = "api/v1"

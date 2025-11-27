@@ -1,6 +1,6 @@
 from django.urls import re_path
 
-from core.applications.users.api import views
+from core.applications.users.api.views import views
 
 urlpatterns = [
     re_path(r"^jwt/login/?$", views.TokenObtainPairView.as_view(), name="jwt-create"),
