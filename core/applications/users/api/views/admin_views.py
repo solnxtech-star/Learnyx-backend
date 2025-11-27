@@ -1,45 +1,39 @@
-from typing import Optional
-from django.db.models import QuerySet, Q
-
-from rest_framework.viewsets import ModelViewSet
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.exceptions import ValidationError, NotFound
-
+from django.db.models import Q
+from django.db.models import QuerySet
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.filters import SearchFilter, OrderingFilter
+from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema_view
+from rest_framework import status
+from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import ValidationError
+from rest_framework.filters import OrderingFilter
+from rest_framework.filters import SearchFilter
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.viewsets import ModelViewSet
 
-from drf_spectacular.utils import extend_schema, extend_schema_view
-
+from core.applications.users.api import schemas as user_schemas
+from core.applications.users.api.schemas import classroom_create_schema
+from core.applications.users.api.schemas import classroom_update_schema
+from core.applications.users.api.serializers.admin_serializers import (
+    AdminProfileListSerializer,
+)
 from core.applications.users.api.serializers.admin_serializers import (
     StudentProfileListSerializer,
+)
+from core.applications.users.api.serializers.admin_serializers import (
     TeacherProfileListSerializer,
-    AdminProfileListSerializer,
+)
+from core.applications.users.api.serializers.admin_serializers import (
     UserActivationSerializer,
 )
-
-from core.applications.users.models import (
-    StudentProfile,
-    TeacherProfile,
-    AdminProfile,
-)
-
-from core.applications.users.permissions import (
-    IsPrincipalOrSchoolOwner,
-    CanActivateUsers,
-)
-
+from core.applications.users.models import AdminProfile
+from core.applications.users.models import StudentProfile
+from core.applications.users.models import TeacherProfile
+from core.applications.users.permissions import CanActivateUsers
+from core.applications.users.permissions import IsPrincipalOrSchoolOwner
 from core.helper.enums import AdmissionStatus
-from core.applications.users.api import (
-    schemas as user_schemas,
-)
-from core.applications.users.api.schemas import (
-    classroom_create_schema,
-    classroom_update_schema,
-)
-
 
 ALLOWED_TYPES = ("student", "teacher", "admin")
 
@@ -108,7 +102,7 @@ class AdminUsersViewset(ModelViewSet):
         user_type = user_type.lower()
         if user_type not in ALLOWED_TYPES:
             raise ValidationError(
-                {"type": "Invalid type. Allowed: student, teacher, admin."}
+                {"type": "Invalid type. Allowed: student, teacher, admin."},
             )
 
         return user_type
@@ -176,7 +170,8 @@ class AdminUsersViewset(ModelViewSet):
 
         try:
             instance = Model.objects.select_related("user").get(
-                id=kwargs["pk"], user__school=request.user.school
+                id=kwargs["pk"],
+                user__school=request.user.school,
             )
         except Model.DoesNotExist:
             raise NotFound("Resource not found in your school.")

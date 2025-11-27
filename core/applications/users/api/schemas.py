@@ -1,12 +1,10 @@
-from drf_spectacular.utils import (
-    extend_schema,
-    extend_schema_view,
-    OpenApiParameter,
-    OpenApiTypes,
-)
+from drf_spectacular.utils import OpenApiParameter
+from drf_spectacular.utils import OpenApiTypes
+from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema_view
+
 from core.applications.users.api.serializers import serializers as user_serializers
 from core.helper.enums import AdmissionStatus
-from drf_spectacular.utils import OpenApiParameter, OpenApiTypes
 
 user_schema = extend_schema_view(
     # ============================================================
@@ -331,33 +329,34 @@ def ACTIVATE_SCHEMA():
         ),
     )
 
+
 classroom_create_schema = extend_schema(
-        summary="Create a Classroom",
-        description=(
-            "Creates a new classroom for the authenticated admin's school.\n\n"
-            "### Example Body\n"
-            "```\n"
-            "{\n"
-            "  \"academic_class\": \"JSS1\",\n"
-            "  \"arm\": \"A\"\n"
-            "}\n"
-            "```\n"
-            "### Notes\n"
-            "- School is automatically assigned.\n"
-            "- Uniqueness is enforced per school.\n"
-        )
-    )
+    summary="Create a Classroom",
+    description=(
+        "Creates a new classroom for the authenticated admin's school.\n\n"
+        "### Example Body\n"
+        "```\n"
+        "{\n"
+        '  "academic_class": "JSS1",\n'
+        '  "arm": "A"\n'
+        "}\n"
+        "```\n"
+        "### Notes\n"
+        "- School is automatically assigned.\n"
+        "- Uniqueness is enforced per school.\n"
+    ),
+)
 
 classroom_update_schema = extend_schema(
-        summary="Update a Classroom",
-        description=(
-            "Modifies an existing classroom belonging to the admin's school.\n\n"
-            "### Example Body\n"
-            "```\n"
-            "{\n"
-            "  \"academic_class\": \"JSS2\",\n"
-            "  \"arm\": \"B\"\n"
-            "}\n"
-            "```\n"
-        )
-    )
+    summary="Update a Classroom",
+    description=(
+        "Modifies an existing classroom belonging to the admin's school.\n\n"
+        "### Example Body\n"
+        "```\n"
+        "{\n"
+        '  "academic_class": "JSS2",\n'
+        '  "arm": "B"\n'
+        "}\n"
+        "```\n"
+    ),
+)

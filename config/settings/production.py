@@ -1,11 +1,5 @@
 # ruff: noqa: E501
-import logging
 
-import sentry_sdk
-from sentry_sdk.integrations.celery import CeleryIntegration
-from sentry_sdk.integrations.django import DjangoIntegration
-from sentry_sdk.integrations.logging import LoggingIntegration
-from sentry_sdk.integrations.redis import RedisIntegration
 
 from .base import *  # noqa: F403
 from .base import DATABASES
@@ -164,6 +158,7 @@ ANYMAIL = {
 # See https://docs.djangoproject.com/en/dev/topics/logging for
 # more details on how to customize your logging configuration.
 
+DEBUG = True
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": True,

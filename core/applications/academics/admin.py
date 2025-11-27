@@ -1,7 +1,9 @@
 from django.contrib import admin
+
 from core.applications.academics.models import ClassRoom
 
 # Register your models here.
+
 
 @admin.register(ClassRoom)
 class ClassRoomAdmin(admin.ModelAdmin):

@@ -1,14 +1,15 @@
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
+from core.applications.academics.api.schemas import assign_teacher_classroom_schema
+from core.applications.users.api.serializers.serializers import TeacherProfileSerializer
 from core.applications.users.models import TeacherProfile
 from core.applications.users.permissions import IsPrincipalOrSchoolOwner
 
 from .serializers import AssignClassRoomSerializer
-from core.applications.users.api.serializers.serializers import TeacherProfileSerializer
-from rest_framework.permissions import IsAuthenticated
-from core.applications.academics.api.schemas import assign_teacher_classroom_schema
+
 
 class TeacherViewSet(ModelViewSet):
     queryset = TeacherProfile.objects.select_related("user")
@@ -16,11 +17,9 @@ class TeacherViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return (
-            TeacherProfile.objects
-            .filter(user__school=self.request.user.school)
-            .select_related("user", "classroom")
-        )
+        return TeacherProfile.objects.filter(
+            user__school=self.request.user.school,
+        ).select_related("user", "classroom")
 
     @assign_teacher_classroom_schema
     @action(
@@ -40,5 +39,5 @@ class TeacherViewSet(ModelViewSet):
         serializer.save(teacher_profile=teacher)
 
         return Response(
-            TeacherProfileSerializer(teacher, context={"request": request}).data
+            TeacherProfileSerializer(teacher, context={"request": request}).data,
         )

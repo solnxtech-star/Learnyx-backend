@@ -1,5 +1,7 @@
 from rest_framework.permissions import BasePermission
-from core.helper.enums import AdminType, UserRole
+
+from core.helper.enums import AdminType
+from core.helper.enums import UserRole
 
 
 class CanActivateUsers(BasePermission):
@@ -25,7 +27,7 @@ class CanActivateUsers(BasePermission):
 
         return admin_profile.admin_type in {
             AdminType.SCHOOL_OWNER,
-            AdminType.PRINCIPAL
+            AdminType.PRINCIPAL,
         }
 
 

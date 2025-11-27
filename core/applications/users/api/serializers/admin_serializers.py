@@ -1,9 +1,12 @@
-from rest_framework import serializers
-from core.applications.users.models import AdminProfile, StudentProfile, TeacherProfile
-from core.helper.enums import AdmissionStatus, AcademicClass
-from core.applications.academics.models import ClassRoom
-
 from django.utils.translation import gettext_lazy as _
+from rest_framework import serializers
+
+from core.applications.academics.models import ClassRoom
+from core.applications.users.models import AdminProfile
+from core.applications.users.models import StudentProfile
+from core.applications.users.models import TeacherProfile
+from core.helper.enums import AcademicClass
+from core.helper.enums import AdmissionStatus
 
 
 class StudentProfileListSerializer(serializers.ModelSerializer):
@@ -96,14 +99,18 @@ class UserActivationSerializer(serializers.Serializer):
     """
 
     type = serializers.ChoiceField(
-        choices=["student", "teacher", "admin"], help_text=_("Profile type")
+        choices=["student", "teacher", "admin"],
+        help_text=_("Profile type"),
     )
     id = serializers.IntegerField(help_text=_("Profile ID"))
     action = serializers.ChoiceField(
-        choices=["approve", "reject"], help_text=_("Action to perform")
+        choices=["approve", "reject"],
+        help_text=_("Action to perform"),
     )
     reason = serializers.CharField(
-        required=False, allow_blank=True, help_text=_("Optional reason")
+        required=False,
+        allow_blank=True,
+        help_text=_("Optional reason"),
     )
 
     MODEL_MAP = {
@@ -123,19 +130,19 @@ class UserActivationSerializer(serializers.Serializer):
         instance = model.objects.select_related("user").filter(id=attrs["id"]).first()
         if not instance:
             raise serializers.ValidationError(
-                {"id": _("Profile not found for the given type.")}
+                {"id": _("Profile not found for the given type.")},
             )
 
         request = self.context.get("request")
         if request is None:
             raise serializers.ValidationError(
-                _("Request is required in serializer context.")
+                _("Request is required in serializer context."),
             )
 
         # Multi-tenancy check
         if instance.school != request.user.school:
             raise serializers.ValidationError(
-                _("You do not have permission to manage profiles outside your school.")
+                _("You do not have permission to manage profiles outside your school."),
             )
 
         # Prevent double approve
@@ -167,6 +174,7 @@ class ClassRoomCreateSerializer(serializers.ModelSerializer):
     Serializer used for creating and updating classrooms.
     School is auto-assigned based on the authenticated admin.
     """
+
     academic_class = serializers.ChoiceField(choices=AcademicClass.choices)
 
     class Meta:
@@ -190,7 +198,7 @@ class ClassRoomCreateSerializer(serializers.ModelSerializer):
             arm=attrs["arm"],
         ).exists():
             raise serializers.ValidationError(
-                f"ClassRoom {attrs['academic_class']} {attrs['arm']} already exists."
+                f"ClassRoom {attrs['academic_class']} {attrs['arm']} already exists.",
             )
 
         return attrs
@@ -201,7 +209,7 @@ class ClassRoomCreateSerializer(serializers.ModelSerializer):
 
         return ClassRoom.objects.create(
             school=school,
-            **validated_data
+            **validated_data,
         )
 
 
@@ -209,7 +217,11 @@ class ClassRoomSerializer(serializers.ModelSerializer):
     """
     Read serializer for listing and retrieving classrooms.
     """
-    class_display = serializers.CharField(source="get_academic_class_display", read_only=True)
+
+    class_display = serializers.CharField(
+        source="get_academic_class_display",
+        read_only=True,
+    )
 
     class Meta:
         model = ClassRoom
