@@ -55,16 +55,29 @@ user_schema = extend_schema_view(
     # USER REGISTRATION & ONBOARDING
     # ============================================================
     register_student=extend_schema(
-        summary="Register a Student",
+        summary="Student Self-Registration",
         description=(
-            "Self-service registration endpoint for students.\n"
-            "Creates a new user with the **student role** and automatically "
-            "creates a `StudentProfile`.\n\n"
-            "Uses the unified user creation + onboarding pipeline.\n"
-            "No admin privileges needed."
+            "Public onboarding endpoint for students.\n\n"
+            "This endpoint allows a student to create an account without admin access. "
+            "A new `User` is created with the **student** role, followed by the automatic creation "
+            "of a linked `StudentProfile`.\n\n"
+            "### How it Works\n"
+            "- Validates user information (email, password, names, school code, etc.)\n"
+            "- Ensures password confirmation\n"
+            "- Resolves school using `school_code`\n"
+            "- Automatically assigns the student to a `ClassRoom` (if provided)\n"
+            "- Returns the newly created user with profile data\n\n"
+            "### Permissions\n"
+            "- No authentication required.\n\n"
+            "### Notes\n"
+            "- This endpoint is part of the unified user-creation pipeline "
+            "used across all Learnxy user roles.\n"
         ),
         request=user_serializers.CustomUserCreateSerializer,
-        responses={201: user_serializers.CustomUserSerializer},
+        responses={
+            201: user_serializers.CustomUserSerializer,
+            400: OpenApiTypes.OBJECT,
+        },
     ),
     register_teacher=extend_schema(
         summary="Register a Teacher (Admin Only)",
@@ -309,11 +322,42 @@ def ACTIVATE_SCHEMA():
             "  ?type=student | teacher | admin\n\n"
             "POST BODY EXAMPLE:\n"
             "{\n"
-            "  \"action\": \"approve\",  // or reject\n"
-            "  \"reason\": \"Documents verified\"\n"
+            '  "action": "approve",  // or reject\n'
+            '  "reason": "Documents verified"\n'
             "}\n\n"
             "Examples:\n"
             "  POST /api/admin/users/12/activate/?type=student\n"
             "  POST /api/admin/users/8/activate/?type=teacher"
         ),
+    )
+
+classroom_create_schema = extend_schema(
+        summary="Create a Classroom",
+        description=(
+            "Creates a new classroom for the authenticated admin's school.\n\n"
+            "### Example Body\n"
+            "```\n"
+            "{\n"
+            "  \"academic_class\": \"JSS1\",\n"
+            "  \"arm\": \"A\"\n"
+            "}\n"
+            "```\n"
+            "### Notes\n"
+            "- School is automatically assigned.\n"
+            "- Uniqueness is enforced per school.\n"
+        )
+    )
+
+classroom_update_schema = extend_schema(
+        summary="Update a Classroom",
+        description=(
+            "Modifies an existing classroom belonging to the admin's school.\n\n"
+            "### Example Body\n"
+            "```\n"
+            "{\n"
+            "  \"academic_class\": \"JSS2\",\n"
+            "  \"arm\": \"B\"\n"
+            "}\n"
+            "```\n"
+        )
     )

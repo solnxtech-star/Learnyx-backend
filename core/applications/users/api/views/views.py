@@ -173,7 +173,7 @@ class TokenBlacklistView(TokenViewBase):
 token_blacklist = TokenBlacklistView.as_view()
 
 
-#  user
+
 @user_schema
 @extend_schema(tags=["User"])
 class UserViewSet(ModelViewSet):

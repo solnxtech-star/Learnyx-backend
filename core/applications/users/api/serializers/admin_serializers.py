@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from core.applications.users.models import AdminProfile, StudentProfile, TeacherProfile
-from core.helper.enums import AdmissionStatus
+from core.helper.enums import AdmissionStatus, AcademicClass
+from core.applications.academics.models import ClassRoom
 
 from django.utils.translation import gettext_lazy as _
 
@@ -159,3 +160,57 @@ class UserActivationSerializer(serializers.Serializer):
         )
         instance.save(update_fields=["status", "approved_by"])
         return instance
+
+
+class ClassRoomCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer used for creating and updating classrooms.
+    School is auto-assigned based on the authenticated admin.
+    """
+    academic_class = serializers.ChoiceField(choices=AcademicClass.choices)
+
+    class Meta:
+        model = ClassRoom
+        fields = ["id", "academic_class", "arm"]
+        extra_kwargs = {
+            "arm": {"required": True},
+        }
+
+    def validate(self, attrs):
+        request = self.context["request"]
+        school = getattr(request.user, "school", None)
+
+        if not school:
+            raise serializers.ValidationError("User does not belong to any school.")
+
+        # Enforce school-level uniqueness before save()
+        if ClassRoom.objects.filter(
+            school=school,
+            academic_class=attrs["academic_class"],
+            arm=attrs["arm"],
+        ).exists():
+            raise serializers.ValidationError(
+                f"ClassRoom {attrs['academic_class']} {attrs['arm']} already exists."
+            )
+
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        school = request.user.school
+
+        return ClassRoom.objects.create(
+            school=school,
+            **validated_data
+        )
+
+
+class ClassRoomSerializer(serializers.ModelSerializer):
+    """
+    Read serializer for listing and retrieving classrooms.
+    """
+    class_display = serializers.CharField(source="get_academic_class_display", read_only=True)
+
+    class Meta:
+        model = ClassRoom
+        fields = ["id", "academic_class", "class_display", "arm", "created", "updated"]

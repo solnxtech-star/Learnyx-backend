@@ -180,6 +180,14 @@ class TeacherProfile(BaseProfile):
     Extended teacher profile containing professional
     and departmental information.
     """
+    classroom = auto_prefetch.ForeignKey(
+        "academics.ClassRoom",
+        on_delete=models.SET_NULL,
+        related_name="teachers",
+        null=True,
+        blank=True,
+        help_text=_("Classroom assigned to this teacher."),
+    )
     staff_id = models.CharField(_("Staff ID"), max_length=50, unique=True)
     qualification = models.CharField(max_length=100, blank=True, null=True)
     specialization = models.CharField(max_length=100, blank=True, null=True)
@@ -194,7 +202,13 @@ class StudentProfile(BaseProfile):
     Extended student profile used for managing
     academic data, guardian details and admission status.
     """
-
+    classroom = auto_prefetch.ForeignKey(
+        "academics.ClassRoom",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="students"
+    )
     student_id = models.CharField(
         _("Student ID"),
         max_length=50,

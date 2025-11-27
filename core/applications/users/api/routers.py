@@ -3,7 +3,10 @@ from rest_framework.routers import DefaultRouter
 from rest_framework.routers import SimpleRouter
 from django.urls import path
 
-from core.applications.users.api.views.admin_views import AdminUsersViewset
+from core.applications.users.api.views.admin_views import (
+    AdminUsersViewset,
+    ClassRoomViewSet,
+)
 from core.applications.users.api.views.views import UserViewSet
 
 PREFIX = "users"
@@ -15,8 +18,9 @@ if settings.DEBUG:
 else:
     router = SimpleRouter()
 
-router.register("users", UserViewSet, basename="users")
+router.register("", UserViewSet, basename="users")
 router.register("admin-users", AdminUsersViewset, basename="admin-users")
+router.register("classrooms", ClassRoomViewSet, basename="classrooms")
 
 
 app_name = f"{PREFIX}"

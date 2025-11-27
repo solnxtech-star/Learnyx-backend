@@ -32,7 +32,13 @@ from core.applications.users.permissions import (
 )
 
 from core.helper.enums import AdmissionStatus
-from core.applications.users.api import schemas as user_schemas
+from core.applications.users.api import (
+    schemas as user_schemas,
+)
+from core.applications.users.api.schemas import (
+    classroom_create_schema,
+    classroom_update_schema,
+)
 
 
 ALLOWED_TYPES = ("student", "teacher", "admin")
@@ -129,10 +135,7 @@ class AdminUsersViewset(ModelViewSet):
         # Search
         if params.get("search"):
             txt = params["search"]
-            qs = qs.filter(
-                Q(user__name__icontains=txt) |
-                Q(user__email__icontains=txt)
-            )
+            qs = qs.filter(Q(user__name__icontains=txt) | Q(user__email__icontains=txt))
 
         # Status filter
         if params.get("status"):
@@ -173,8 +176,7 @@ class AdminUsersViewset(ModelViewSet):
 
         try:
             instance = Model.objects.select_related("user").get(
-                id=kwargs["pk"],
-                user__school=request.user.school
+                id=kwargs["pk"], user__school=request.user.school
             )
         except Model.DoesNotExist:
             raise NotFound("Resource not found in your school.")
@@ -204,3 +206,43 @@ class AdminUsersViewset(ModelViewSet):
             {"detail": f"{instance.user.email} has been {instance.status}."},
             status=status.HTTP_200_OK,
         )
+
+
+@extend_schema(tags=["ClassRooms"])
+class ClassRoomViewSet(ModelViewSet):
+    """
+    CRUD for ClassRooms (JSS1 A, SS2 B, etc.)
+    Only School Owners and Principals can manage classrooms.
+    """
+
+    permission_classes = [IsAuthenticated, IsPrincipalOrSchoolOwner]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+
+    filterset_fields = ["academic_class"]
+    search_fields = ["arm", "academic_class"]
+    ordering_fields = ["academic_class", "arm", "created"]
+    ordering = ["academic_class", "arm"]
+
+    def get_queryset(self):
+        """
+        Restrict classrooms to the authenticated admin's school (multi-tenant isolation).
+        """
+        user = self.request.user
+
+        if not hasattr(user, "school") or user.school is None:
+            return ClassRoom.objects.none()
+
+        return ClassRoom.objects.filter(school=user.school)
+
+    def get_serializer_class(self):
+        if self.action in ["create", "update", "partial_update"]:
+            return ClassRoomCreateSerializer
+        return ClassRoomSerializer
+
+    @classroom_create_schema
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
+    @classroom_update_schema
+    def update(self, request, *args, **kwargs):
+        return super().update(request, *args, **kwargs)
