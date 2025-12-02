@@ -13,11 +13,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
+from core.applications.academics.models import ClassRoom
 from core.applications.users.api import schemas as user_schemas
 from core.applications.users.api.schemas import classroom_create_schema
 from core.applications.users.api.schemas import classroom_update_schema
 from core.applications.users.api.serializers.admin_serializers import (
     AdminProfileListSerializer,
+    ClassRoomCreateSerializer,
+    ClassRoomSerializer,
 )
 from core.applications.users.api.serializers.admin_serializers import (
     StudentProfileListSerializer,
@@ -187,23 +190,33 @@ class AdminUsersViewset(ModelViewSet):
     def activate(self, request, pk=None):
         """Approve or reject a user profile."""
         data = request.data.copy()
-        data["id"] = pk
+        # NO LONGER setting data["id"] = pk
         data.setdefault("type", request.query_params.get("type"))
 
         serializer = UserActivationSerializer(
             data=data,
-            context={"request": request},
+            context={
+                "request": request,
+                "profile_id": pk  # Pass profile_id in context
+            },
         )
         serializer.is_valid(raise_exception=True)
         instance = serializer.save()
 
+        # Enhanced response message
+        action = data.get("action")
+        if action == "approve":
+            message = f"{instance.user.email} has been approved and notified via email."
+        else:
+            message = f"{instance.user.email} has been rejected and notified via email."
+
         return Response(
-            {"detail": f"{instance.user.email} has been {instance.status}."},
+            {"detail": message},
             status=status.HTTP_200_OK,
         )
 
 
-@extend_schema(tags=["ClassRooms"])
+@extend_schema(tags=["Admin User"])
 class ClassRoomViewSet(ModelViewSet):
     """
     CRUD for ClassRooms (JSS1 A, SS2 B, etc.)
@@ -234,10 +247,10 @@ class ClassRoomViewSet(ModelViewSet):
             return ClassRoomCreateSerializer
         return ClassRoomSerializer
 
-    @classroom_create_schema
+    # @classroom_create_schema
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
 
-    @classroom_update_schema
+    # @classroom_update_schema
     def update(self, request, *args, **kwargs):
         return super().update(request, *args, **kwargs)

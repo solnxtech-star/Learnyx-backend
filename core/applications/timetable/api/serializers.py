@@ -10,12 +10,13 @@ from core.helper.enums import UserRole
 
 
 class SubjectSerializer(serializers.ModelSerializer):
-    """Serializer for Subject model"""
+    school_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Subject
         fields = [
             "id",
+            "school_id",
             "name",
             "code",
             "description",
@@ -23,7 +24,22 @@ class SubjectSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "is_active", "created_at", "updated_at"]
+
+    def create(self, validated_data):
+        # Inject the acting admin’s school
+        validated_data["school"] = self.context["request"].user.adminprofile.school
+        return super().create(validated_data)
+
+    def validate_name(self, value):
+        if len(value) < 2:
+            raise serializers.ValidationError("Subject name is too short.")
+        return value
+
+    def validate_code(self, value):
+        if " " in value:
+            raise serializers.ValidationError("Subject code cannot contain spaces.")
+        return value.upper()
 
 
 class TimeSlotSerializer(serializers.ModelSerializer):

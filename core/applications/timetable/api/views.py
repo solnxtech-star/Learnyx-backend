@@ -17,130 +17,76 @@ from core.applications.timetable.models import ClassSchedule
 from core.applications.timetable.models import Subject
 from core.applications.timetable.models import TimeSlot
 from core.applications.timetable.models import Timetable
+from core.applications.timetable.api.schemas import subject_schema
+from core.applications.users.permissions import CanManageSubjects
 from core.helper.enums import UserRole
 
 
-@extend_schema_view(
-    list=extend_schema(description="List all subjects"),
-    retrieve=extend_schema(description="Get a specific subject"),
-    create=extend_schema(description="Create a new subject (Admin/Teacher only)"),
-    update=extend_schema(description="Update a subject (Admin/Teacher only)"),
-    partial_update=extend_schema(
-        description="Partially update a subject (Admin/Teacher only)",
-    ),
-    destroy=extend_schema(description="Delete a subject (Admin only)"),
-)
+@extend_schema_view(**subject_schema)
 class SubjectViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for managing subjects.
+    Manage academic subjects for a specific school.
 
-    Students: Read-only access
-    Teachers: Can create and update
-    Admins: Full CRUD access
+    Students: Read-only
+    Teachers: Create + Update
+    Admins: Full CRUD
     """
 
-    queryset = Subject.objects.filter(is_active=True)
     serializer_class = SubjectSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [CanManageSubjects]
 
     def get_queryset(self):
-        # All authenticated users can see active subjects
-        return Subject.objects.filter(is_active=True).order_by("name")
+        user = self.request.user
 
-    def get_permissions(self):
-        # Read-only for students, write access for teachers and admins
-        if self.action in ["list", "retrieve"]:
-            return [IsAuthenticated()]
-        return [IsAuthenticated()]
+        # Students don't have adminprofile.school but can still view active subjects
+        school = getattr(user, "adminprofile", None)
+        if school:
+            school = school.school
 
-    def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
+        if school:
+            return Subject.objects.filter(
+                school=school,
+                is_active=True,
+            ).order_by("name")
+
+        return Subject.objects.none()
+
+    # ---------- Response Formatting ----------
+    def success(self, message, data=None, status_code=status.HTTP_200_OK):
         return Response(
-            {
-                "success": True,
-                "message": "Subjects retrieved successfully",
-                "data": serializer.data,
-            },
+            {"success": True, "message": message, "data": data},
+            status=status_code,
         )
 
-    def retrieve(self, request, *args, **kwargs):
-        instance = self.get_object()
-        serializer = self.get_serializer(instance)
-        return Response(
-            {
-                "success": True,
-                "message": "Subject retrieved successfully",
-                "data": serializer.data,
-            },
-        )
-
+    # ---------- CRUD ----------
     def create(self, request, *args, **kwargs):
-        # Only admins and teachers can create subjects
-        if request.user.role not in [UserRole.ADMIN, UserRole.TEACHER]:
-            from rest_framework.exceptions import PermissionDenied
-
-            raise PermissionDenied("Only admins and teachers can create subjects.")
-
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
-
-        # Custom response format
-        return Response(
-            {
-                "success": True,
-                "message": "Subject created successfully",
-                "data": serializer.data,
-            },
-            status=status.HTTP_201_CREATED,
+        subject = serializer.save()
+        return self.success(
+            "Subject created successfully",
+            SubjectSerializer(subject).data,
+            status.HTTP_201_CREATED,
         )
-
-    def perform_update(self, serializer):
-        # Only admins and teachers can update subjects
-        if self.request.user.role not in [UserRole.ADMIN, UserRole.TEACHER]:
-            from rest_framework.exceptions import PermissionDenied
-
-            raise PermissionDenied("Only admins and teachers can update subjects.")
-        serializer.save()
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
+
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
+        subject = serializer.save()
 
-        return Response(
-            {
-                "success": True,
-                "message": "Subject updated successfully",
-                "data": serializer.data,
-            },
+        return self.success(
+            "Subject updated successfully",
+            SubjectSerializer(subject).data,
         )
-
-    def perform_destroy(self, instance):
-        # Only admins can delete subjects
-        if self.request.user.role != UserRole.ADMIN:
-            from rest_framework.exceptions import PermissionDenied
-
-            raise PermissionDenied("Only admins can delete subjects.")
-        # Soft delete by setting is_active to False
-        instance.is_active = False
-        instance.save()
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        self.perform_destroy(instance)
-        return Response(
-            {
-                "success": True,
-                "message": "Subject deleted successfully",
-                "data": None,
-            },
-            status=status.HTTP_200_OK,
-        )
-
+        instance.is_active = False
+        instance.save()
+        return self.success("Subject archived successfully")
 
 @extend_schema_view(
     list=extend_schema(description="List all time slots"),

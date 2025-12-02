@@ -1,15 +1,23 @@
 {% load i18n %}
 
 {% block subject %}
-  {% blocktrans %}{{ site_name }} - Your account has been successfully created and activated!{% endblocktrans %}
+  {% blocktrans %}{{ site_name }} - Your Account Has Been Created Successfully{% endblocktrans %}
 {% endblock subject %}
 {% block text_body %}
-  {% trans "Your account has been created and is ready to use!" %}
-  {% trans "Thanks for using our site!" %}
+  {% trans "Your account has been successfully created and is awaiting approval." %}
+  {% trans "Our admin team will review your registration and you will be notified via email once your account is approved." %}
+  {% trans "You will not be able to access your account until it has been approved." %}
+  {% trans "Thanks for your patience!" %}
   {% blocktrans %}The {{ site_name }} team{% endblocktrans %}
 {% endblock text_body %}
 {% block html_body %}
-  <p>{% trans "Your account has been created and is ready to use!" %}</p>
-  <p>{% trans "Thanks for using our site!" %}</p>
+  <p>{% trans "Your account has been successfully created and is awaiting approval." %}</p>
+  <p>
+    {% trans "Our admin team will review your registration and you will be notified via email once your account is approved." %}
+  </p>
+  <p>
+    <strong>{% trans "You will not be able to access your account until it has been approved." %}</strong>
+  </p>
+  <p>{% trans "Thanks for your patience!" %}</p>
   <p>{% blocktrans %}The {{ site_name }} team{% endblocktrans %}</p>
 {% endblock html_body %}

@@ -120,12 +120,7 @@ class BaseProfile(TimeStampedModel):
     - Approval workflow fields (status, approved_by)
     """
 
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="%(class)s_profile",
-        help_text=_("The user linked to this profile."),
-    )
+
 
     status = models.CharField(
         max_length=20,
@@ -158,7 +153,11 @@ class AdminProfile(BaseProfile):
     - Admin type (School Owner, Principal, etc.)
     - Optional organizational attributes
     """
-
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="adminprofile",
+    )
     admin_type = models.CharField(
         max_length=50,
         choices=AdminType.choices,
@@ -187,7 +186,11 @@ class TeacherProfile(BaseProfile):
     Extended teacher profile containing professional
     and departmental information.
     """
-
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="teacherprofile",
+    )
     classroom = auto_prefetch.ForeignKey(
         "academics.ClassRoom",
         on_delete=models.SET_NULL,
@@ -210,7 +213,11 @@ class StudentProfile(BaseProfile):
     Extended student profile used for managing
     academic data, guardian details and admission status.
     """
-
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="studentprofile",
+    )
     classroom = auto_prefetch.ForeignKey(
         "academics.ClassRoom",
         on_delete=models.SET_NULL,
@@ -250,6 +257,11 @@ class StudentProfile(BaseProfile):
 
 
 class ParentProfile(BaseProfile):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="parentprofile",
+    )
     occupation = models.CharField(max_length=100, blank=True, null=True)
     address = models.CharField(max_length=255, blank=True, null=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
