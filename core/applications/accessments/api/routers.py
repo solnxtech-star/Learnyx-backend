@@ -6,7 +6,12 @@ from core.applications.accessments.api.views.academic_views import (
     AcademicTermViewSet,
     SubjectViewSet,
 )
+from core.applications.accessments.api.views.accessment_views import (
+    AssessmentPolicyViewSet,
+    AssessmentTypeViewSet,
+)
 from core.applications.accessments.api.views.grades_views import GradeScaleViewSet
+
 
 PREFIX = "accessments"
 API_VERSION = settings.API_VERSION
@@ -24,6 +29,10 @@ router.register("sessions", AcademicSessionViewSet, basename="academic-sessions"
 router.register("terms", AcademicTermViewSet, basename="academic-terms")
 router.register("subjects", SubjectViewSet, basename="subjects")
 router.register("grade-scales", GradeScaleViewSet, basename="grade-scales")
+router.register(
+    "assessment-policies", AssessmentPolicyViewSet, basename="assessment-policies"
+)
+router.register("assessment-types", AssessmentTypeViewSet, basename="assessment-types")
 
 # =============================================================
 
