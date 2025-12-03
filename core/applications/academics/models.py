@@ -1,6 +1,7 @@
 import auto_prefetch
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from django.core.exceptions import ValidationError
 
 from core.helper.enums import AcademicClass
 from core.helper.models import TimeStampedModel
@@ -31,3 +32,52 @@ class ClassRoom(TimeStampedModel):
 
     def __str__(self):
         return f"{self.academic_class} {self.arm}"
+
+
+class TeachingAssignment(TimeStampedModel):
+    """
+    Defines what a teacher teaches:
+    - Which class(es)
+    - Which subject(s)
+    Fully multi-tenant and scalable.
+    """
+
+    teacher = auto_prefetch.ForeignKey(
+        "users.TeacherProfile",
+        on_delete=models.CASCADE,
+        related_name="teaching_assignments",
+    )
+
+    classroom = auto_prefetch.ForeignKey(
+        "academics.ClassRoom",
+        on_delete=models.CASCADE,
+        related_name="teaching_assignments",
+    )
+
+    subject = auto_prefetch.ForeignKey(
+        "timetable.Subject",
+        on_delete=models.CASCADE,
+        related_name="teaching_assignments",
+    )
+
+    class Meta(auto_prefetch.Model.Meta):
+        db_table = "teaching_assignments"
+        verbose_name = "Teaching Assignment"
+        verbose_name_plural = "Teaching Assignments"
+        unique_together = ("teacher", "classroom", "subject")
+
+    def clean(self):
+        """
+        SaaS MULTI-TENANT VALIDATION:
+        Ensure teacher, classroom, and subject belong to the same school.
+        """
+        if (
+            self.teacher.school != self.classroom.school
+            or self.teacher.school != self.subject.school
+        ):
+            raise ValidationError(
+                "Teacher, Classroom, and Subject must belong to the same school."
+            )
+
+    def __str__(self):
+        return f"{self.teacher.user.name} teaches {self.subject.name} in {self.classroom}"

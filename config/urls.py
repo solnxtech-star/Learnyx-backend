@@ -37,12 +37,16 @@ urlpatterns += [
     # API base url
     # path("api/", include("config.api_router")),
     path(
-        "users/",
+        "api/users/",
         include("core.applications.users.api.routers", namespace="users-api"),
     ),
     path(
         "api/timetable/",
         include("core.applications.timetable.urls", namespace="timetable"),
+    ),
+    path(
+        "api/accessments/",
+        include("core.applications.accessments.api.routers", namespace="accessments"),
     ),
     # DRF auth token
     path("api/auth-token/", obtain_auth_token, name="obtain_auth_token"),
