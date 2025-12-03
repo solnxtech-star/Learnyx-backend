@@ -73,6 +73,8 @@ class AssessmentPolicy(TimeStampedModel):
     )
     name = models.CharField(max_length=150, default="Default Policy")
     is_active = models.BooleanField(default=True)
+    ca_weight = models.PositiveIntegerField(default=40, help_text=_("Continuous Assessment weight (%)"))
+    exam_weight = models.PositiveIntegerField(default=60, help_text=_("Examination weight (%)"))
 
     class Meta(auto_prefetch.Model.Meta):
         constraints = [
