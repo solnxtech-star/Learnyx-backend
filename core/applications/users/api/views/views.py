@@ -473,7 +473,10 @@ class UserViewSet(ModelViewSet):
         user = serializer.instance
 
         return Response(
-            {"message": "Student registered successfully", "user_id": user.id},
+            {
+                "message": "Student registered successfully Check your mail to Activate",
+                "user_id": user.id,
+            },
             status=status.HTTP_201_CREATED,
         )
 
