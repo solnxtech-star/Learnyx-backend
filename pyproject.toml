@@ -216,4 +216,5 @@ dependencies = [
     "reportlab==4.0.9",
     "django-auto-prefetch==1.9.0",
     "fido2>=2.0.0",
+    "django-anymail[brevo]==12.0"
 ]
