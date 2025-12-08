@@ -186,19 +186,27 @@ class TeacherProfile(BaseProfile):
     Extended teacher profile containing professional
     and departmental information.
     """
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="teacherprofile",
     )
-    classroom = auto_prefetch.ForeignKey(
+
+    classrooms = models.ManyToManyField(
         "academics.ClassRoom",
-        on_delete=models.SET_NULL,
         related_name="teachers",
-        null=True,
         blank=True,
-        help_text=_("Classroom assigned to this teacher."),
+        help_text=_("Classrooms assigned to this teacher."),
     )
+
+    subjects = models.ManyToManyField(
+        "academics.Subject",
+        related_name="teachers",
+        blank=True,
+        help_text=_("Subjects this teacher can teach."),
+    )
+
     staff_id = models.CharField(_("Staff ID"), max_length=50, unique=True)
     qualification = models.CharField(max_length=100, blank=True, null=True)
     specialization = models.CharField(max_length=100, blank=True, null=True)
@@ -206,6 +214,7 @@ class TeacherProfile(BaseProfile):
 
     def __str__(self):
         return f"Teacher: {self.user.name or self.user.email}"
+
 
 
 class StudentProfile(BaseProfile):

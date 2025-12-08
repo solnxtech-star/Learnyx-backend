@@ -1,10 +1,37 @@
 from drf_spectacular.utils import OpenApiParameter
+from drf_spectacular.utils import OpenApiResponse
 from drf_spectacular.utils import OpenApiTypes
 from drf_spectacular.utils import extend_schema
-from drf_spectacular.utils import extend_schema_view
+from drf_spectacular.utils import extend_schema_view, OpenApiExample
 
+from rest_framework import serializers
 from core.applications.users.api.serializers import serializers as user_serializers
+from core.applications.users.api.serializers.academic_section_serializers import (
+    AcademicSessionSerializer,
+    AcademicTermSerializer,
+    AdminAssignClassroomsSerializer,
+    AdminAssignSubjectsSerializer,
+    SubjectSerializer,
+    TeacherCreateTeachingAssignmentsSerializer,
+    TeacherDetailSerializer,
+    TeacherListSerializer,
+    TeacherReassignTeachingAssignmentSerializer,
+)
+from core.applications.users.api.serializers.admin_grading_serializers import (
+    DefaultGradingSystemSerializer,
+    GradeScaleBulkCreateSerializer,
+    GradeScaleSerializer,
+)
 from core.helper.enums import AdmissionStatus
+
+# Response constants
+BAD_REQUEST_RESP = OpenApiResponse(
+    description="Validation error. Response contains field errors.",
+)
+NOT_FOUND_RESP = OpenApiResponse(description="Resource not found.")
+UNAUTHORIZED_RESP = OpenApiResponse(
+    description="Authentication credentials were not provided or are invalid."
+)
 
 user_schema = extend_schema_view(
     # ============================================================
@@ -360,3 +387,473 @@ classroom_update_schema = extend_schema(
         "```\n"
     ),
 )
+
+
+# ============================================================================
+# Academic Session Schema Decorator
+# ============================================================================
+ACADEMIC_SESSION_SCHEMA = extend_schema_view(
+    list=extend_schema(
+        summary="List Academic Sessions",
+        description="""
+        Returns academic sessions for the authenticated user's school.
+
+        Notes:
+        - Results are scoped to the user's school.
+        - By default this returns all sessions; frontends may filter to `is_active=true`.
+        """,
+        tags=["Academics"],
+        responses={200: AcademicSessionSerializer(many=True), 401: NOT_FOUND_RESP},
+    ),
+    create=extend_schema(
+        summary="Create Academic Session",
+        description="""
+        Creates a new academic session.
+
+        Business rules:
+        - Name must follow `YYYY/YYYY` or `YYYY-YYYY`.
+        - If `is_active=true`, all other sessions in the same school are automatically deactivated.
+
+        Validation notes:
+        - Serializer will return 400 when name format is invalid or school context is missing.
+
+        Example request body:
+        ```json
+        {
+          "name": "2024/2025",
+          "is_active": true
+        }
+        ```
+        """,
+        tags=["Academics"],
+        request=AcademicSessionSerializer,
+        responses={
+            201: AcademicSessionSerializer,
+            400: BAD_REQUEST_RESP,
+            401: UNAUTHORIZED_RESP,
+        },
+    ),
+    retrieve=extend_schema(
+        summary="Retrieve Academic Session",
+        description="Fetch a single academic session by ID.",
+        tags=["Academics"],
+        responses={200: AcademicSessionSerializer, 404: NOT_FOUND_RESP},
+    ),
+    update=extend_schema(
+        summary="Update Academic Session",
+        description="""
+        Fully update an existing session.
+
+        Notes:
+        - Activation rules apply on update (activating will deactivate other sessions).
+        """,
+        tags=["Academics"],
+        request=AcademicSessionSerializer,
+        responses={
+            200: AcademicSessionSerializer,
+            400: BAD_REQUEST_RESP,
+            404: NOT_FOUND_RESP,
+        },
+    ),
+    partial_update=extend_schema(
+        summary="Partially update Academic Session",
+        tags=["Academics"],
+        request=AcademicSessionSerializer,
+        responses={200: AcademicSessionSerializer, 400: BAD_REQUEST_RESP},
+    ),
+    destroy=extend_schema(
+        summary="Deactivate Academic Session",
+        description="Soft-delete: sets `is_active=false`. Record remains in DB.",
+        tags=["Academics"],
+        responses={204: OpenApiResponse(description="No Content")},
+    ),
+)
+
+
+# ============================================================================
+# Academic Term Schema Decorator
+# ============================================================================
+ACADEMIC_TERM_SCHEMA = extend_schema_view(
+    list=extend_schema(
+        summary="List Academic Terms",
+        description="""
+        Returns terms for the authenticated user's school.
+
+        Query params:
+        - `session_id` (optional): filter terms belonging to a specific session.
+        """,
+        parameters=[
+            OpenApiParameter("session_id", str, description="Academic Session ID")
+        ],
+        tags=["Academics"],
+        responses={200: AcademicTermSerializer(many=True)},
+    ),
+    create=extend_schema(
+        summary="Create Academic Term",
+        description="""
+        Creates a new term under a session.
+
+        Business rules:
+        - Allowed term names: "First Term", "Second Term", "Third Term".
+        - Only one active term per session.
+        - Cannot activate a term when the parent session is inactive.
+
+        Example request:
+        ```json
+        {
+          "session": "<session_uuid>",
+          "name": "First Term",
+          "term_type": "FULL_TERM",
+          "is_active": true
+        }
+        ```
+        """,
+        tags=["Academics"],
+        request=AcademicTermSerializer,
+        responses={
+            201: AcademicTermSerializer,
+            400: BAD_REQUEST_RESP,
+            404: NOT_FOUND_RESP,
+        },
+    ),
+    retrieve=extend_schema(
+        summary="Retrieve Academic Term",
+        tags=["Academics"],
+        responses={200: AcademicTermSerializer, 404: NOT_FOUND_RESP},
+    ),
+    update=extend_schema(
+        summary="Update Academic Term",
+        description="Updates a term. Activation rules enforced by serializer.",
+        tags=["Academics"],
+        request=AcademicTermSerializer,
+        responses={200: AcademicTermSerializer, 400: BAD_REQUEST_RESP},
+    ),
+    partial_update=extend_schema(
+        summary="Partially update Academic Term",
+        tags=["Academics"],
+        request=AcademicTermSerializer,
+        responses={200: AcademicTermSerializer, 400: BAD_REQUEST_RESP},
+    ),
+    destroy=extend_schema(
+        summary="Deactivate Academic Term",
+        description="Soft-delete by setting `is_active=false`.",
+        tags=["Academics"],
+        responses={204: OpenApiResponse(description="No Content")},
+    ),
+)
+
+
+# ============================================================================
+# Subject Schema Decorator
+# ============================================================================
+SUBJECT_SCHEMA = extend_schema_view(
+    list=extend_schema(
+        summary="List Subjects",
+        description="""
+        Returns subjects for the authenticated user's school.
+
+        Supports search via `?search=<name>`.
+        """,
+        parameters=[
+            OpenApiParameter("search", str, description="Search by subject name")
+        ],
+        tags=["Academics"],
+        responses={200: SubjectSerializer(many=True)},
+    ),
+    create=extend_schema(
+        summary="Create Subject",
+        description="""
+        Creates a subject. Optionally link to classrooms by their IDs.
+
+        Request example:
+        ```json
+        {
+          "name": "Mathematics",
+          "code": "MTH101",
+          "description": "Basic math",
+          "class_rooms": ["<classroom_uuid_1>", "<classroom_uuid_2>"],
+          "is_active": true
+        }
+        ```
+        Validation:
+        - All class_rooms must belong to the same school (validated by serializer).
+        """,
+        tags=["Academics"],
+        request=SubjectSerializer,
+        responses={201: SubjectSerializer, 400: BAD_REQUEST_RESP},
+    ),
+    retrieve=extend_schema(
+        summary="Retrieve Subject",
+        tags=["Academics"],
+        responses={200: SubjectSerializer, 404: NOT_FOUND_RESP},
+    ),
+    update=extend_schema(
+        summary="Update Subject",
+        description="Updates subject and its classroom mappings.",
+        tags=["Academics"],
+        request=SubjectSerializer,
+        responses={200: SubjectSerializer, 400: BAD_REQUEST_RESP},
+    ),
+    partial_update=extend_schema(
+        summary="Partially update Subject",
+        tags=["Academics"],
+        request=SubjectSerializer,
+        responses={200: SubjectSerializer, 400: BAD_REQUEST_RESP},
+    ),
+    destroy=extend_schema(
+        summary="Deactivate Subject",
+        description="Soft-delete via `is_active=false`.",
+        tags=["Academics"],
+        responses={204: OpenApiResponse(description="No Content")},
+    ),
+)
+
+TeacherViewSetSchema = extend_schema_view(
+    # ============================================================
+    # LIST TEACHERS
+    # ============================================================
+    list=extend_schema(
+        summary="List All Teachers (School Restricted)",
+        description=(
+            "Returns a list of teachers belonging to the authenticated user's school.\n\n"
+            "Use this endpoint for:\n"
+            " - Admin viewing all teachers\n"
+            " - Filtering staff in a multi-tenant environment\n"
+        ),
+        responses={200: TeacherListSerializer},
+    ),
+    # ============================================================
+    # RETRIEVE SINGLE TEACHER
+    # ============================================================
+    retrieve=extend_schema(
+        summary="Retrieve a Teacher Profile",
+        description=(
+            "Fetch detailed information about a single teacher, including:\n"
+            " - Personal + professional data\n"
+            " - Assigned classrooms\n"
+            " - Assigned subjects\n\n"
+            "Only accessible within the school scope."
+        ),
+        responses={200: TeacherDetailSerializer},
+    ),
+    # ============================================================
+    # ADMIN: ASSIGN CLASSROOMS
+    # ============================================================
+    assign_classrooms=extend_schema(
+        summary="Assign Classrooms to Teacher (Admin Only)",
+        description=(
+            "**ADMIN ACTION**\n\n"
+            "Assign one or multiple classrooms to a teacher.\n"
+            "This action *replaces all existing classroom assignments.*\n\n"
+            "Validations:\n"
+            " - Classroom IDs must exist\n"
+            " - All must belong to admin’s school\n"
+        ),
+        request=AdminAssignClassroomsSerializer,
+        responses={
+            200: TeacherDetailSerializer,
+            400: OpenApiResponse(description="Invalid classroom IDs"),
+            403: OpenApiResponse(description="Not allowed"),
+        },
+        examples=[
+            OpenApiExample(
+                "Assign Classrooms Example",
+                value={"classroom_ids": ["uuid-123", "uuid-456"]},
+            )
+        ],
+    ),
+    # ============================================================
+    # ADMIN: ASSIGN SUBJECTS
+    # ============================================================
+    assign_subjects=extend_schema(
+        summary="Assign Subjects to Teacher (Admin Only)",
+        description=(
+            "**ADMIN ACTION**\n\n"
+            "Assign one or multiple subjects to a teacher.\n"
+            "This **fully replaces** previous subject assignments.\n\n"
+            "Validations:\n"
+            " - All subjects must exist\n"
+            " - Must belong to admin’s school"
+        ),
+        request=AdminAssignSubjectsSerializer,
+        responses={
+            200: TeacherDetailSerializer,
+            400: OpenApiResponse(description="Invalid subject IDs"),
+            403: OpenApiResponse(description="Not allowed"),
+        },
+    ),
+    # ============================================================
+    # TEACHER: BULK CREATE TEACHING ASSIGNMENTS
+    # ============================================================
+    assign_teaching=extend_schema(
+        summary="Teacher: Bulk Assign Classroom + Subject Combinations",
+        description=(
+            "**TEACHER ACTION**\n\n"
+            "Allows a teacher to assign themselves to multiple classes and subjects.\n"
+            "Useful for bulk creation of teaching roles.\n\n"
+            "Validations:\n"
+            " - Classroom + Subject must belong to teacher’s school\n"
+            " - Avoids creating duplicates using `get_or_create`\n"
+        ),
+        request=TeacherCreateTeachingAssignmentsSerializer,
+        responses={
+            200: OpenApiResponse(description="Assignments Created Successfully"),
+            403: OpenApiResponse(
+                description="Teacher cannot assign on behalf of others"
+            ),
+        },
+        examples=[
+            OpenApiExample(
+                "Bulk Teaching Assignment Example",
+                value={
+                    "assignments": [
+                        {"classroom": "uuid-101", "subject": "uuid-201"},
+                        {"classroom": "uuid-102", "subject": "uuid-202"},
+                    ]
+                },
+            )
+        ],
+    ),
+    # ============================================================
+    # TEACHER: UPDATE SINGLE TEACHING ASSIGNMENT
+    # ============================================================
+    reassign_teaching=extend_schema(
+        summary="Teacher: Update an Existing Teaching Assignment",
+        description=(
+            "**TEACHER ACTION**\n\n"
+            "Allows a teacher to modify one of their teaching assignments.\n"
+            "Teachers can change:\n"
+            " - classroom\n"
+            " - subject\n"
+            " - or both\n\n"
+            "Validations:\n"
+            " - New classroom/subject must be valid for school\n"
+            " - Duplicate combinations are prevented\n"
+        ),
+        request=TeacherReassignTeachingAssignmentSerializer,
+        responses={
+            200: OpenApiResponse(description="Assignment Updated Successfully"),
+            404: OpenApiResponse(description="Assignment Not Found"),
+            403: OpenApiResponse(
+                description="Cannot modify another teacher's assignment"
+            ),
+        },
+    ),
+)
+
+GRADING_SCHEMA = extend_schema_view(
+    list=extend_schema(
+        tags=["Grade Scales"],
+        summary="List all grade scales for the school",
+        description=(
+            "Returns all grade scales configured for the authenticated user's school.\n"
+            "Results are ordered by `max_score` (descending) and then by `order`.\n"
+            "Teachers can only view grade scales, while principals/school owners can manage them."
+        ),
+        responses={200: GradeScaleSerializer(many=True)},
+    ),
+    retrieve=extend_schema(
+        tags=["Grade Scales"],
+        summary="Retrieve a single grade scale",
+        description="Fetch details for a specific grade scale belonging to the authenticated user's school.",
+        responses={200: GradeScaleSerializer},
+    ),
+    create=extend_schema(
+        tags=["Grade Scales"],
+        summary="Create a grade scale",
+        description=(
+            "Create a new grading scale bound to the authenticated user's school.\n"
+            "**Only principals/school owners** can perform this action."
+        ),
+        request=GradeScaleSerializer,
+        responses={201: GradeScaleSerializer},
+    ),
+    update=extend_schema(
+        tags=["Grade Scales"],
+        summary="Update a grade scale",
+        description=(
+            "Fully update an existing grade scale.\n"
+            "The `school` field is locked and cannot be changed."
+        ),
+        request=GradeScaleSerializer,
+        responses={200: GradeScaleSerializer},
+    ),
+    partial_update=extend_schema(
+        tags=["Grade Scales"],
+        summary="Partially update a grade scale",
+        description="Update specific fields on an existing grade scale.",
+        request=GradeScaleSerializer,
+        responses={200: GradeScaleSerializer},
+    ),
+    destroy=extend_schema(
+        tags=["Grade Scales"],
+        summary="Delete a grade scale",
+        description=(
+            "Soft delete or permanently remove a grade scale. "
+            "Behavior depends on backend policy. Teachers cannot delete scales."
+        ),
+        responses={204: OpenApiResponse(description="Grade scale deleted")},
+    ),
+)
+
+
+GRADE_SCALE_ACTION_SCHEMAS = {
+    "bulk_create": extend_schema(
+        tags=["Grade Scales"],
+        summary="Bulk create grading scales (atomic)",
+        description=(
+            "Allows admins to upload multiple grading scales at once.\n"
+            "- All existing active scales are deactivated.\n"
+            "- The new scales become the active grading system.\n"
+            "- This operation is atomic (all-or-nothing)."
+        ),
+        request=GradeScaleBulkCreateSerializer,
+        responses={201: OpenApiResponse(description="Bulk-created grade scales")},
+    ),
+    "apply_default": extend_schema(
+        tags=["Grade Scales"],
+        summary="Apply a predefined grading system",
+        description=(
+            "Apply a default grading system (e.g., *standard*, *extended*, *nigerian*).\n"
+            "This resets the current active system and loads the chosen preset."
+        ),
+        request=DefaultGradingSystemSerializer,
+        responses={200: OpenApiResponse(description="Default grading system applied")},
+    ),
+    "activate": extend_schema(
+        tags=["Grade Scales"],
+        summary="Activate a grade scale",
+        description=(
+            "Marks the grade scale as active. Other scales remain unchanged.\n"
+            "Used when multiple grade scales exist but only some should count."
+        ),
+        responses={200: OpenApiResponse(description="Grade scale activated")},
+    ),
+    "deactivate": extend_schema(
+        tags=["Grade Scales"],
+        summary="Deactivate a grade scale",
+        description="Marks the grade scale as inactive. Does not delete the record.",
+        responses={200: OpenApiResponse(description="Grade scale deactivated")},
+    ),
+    "reset": extend_schema(
+        tags=["Grade Scales"],
+        summary="Reset grading system",
+        description=(
+            "Deactivates **all** active grade scales for the school.\n"
+            "This does not delete records — it is a soft reset."
+        ),
+        responses={204: OpenApiResponse(description="Grading system reset")},
+    ),
+    "reorder": extend_schema(
+        tags=["Grade Scales"],
+        summary="Reorder grade scales",
+        description=(
+            "Accepts: `{ order: [ids...] }`\n"
+            "- Order controls how grades show in frontend tables.\n"
+            "- Highest grade should be first.\n"
+            "- IDs must belong to the current school."
+        ),
+        request=serializers.ListField(child=serializers.IntegerField()),
+        responses={200: OpenApiResponse(description="Grades reordered successfully")},
+    ),
+}
