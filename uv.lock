@@ -602,21 +602,16 @@ mfa = [
 
 [[package]]
 name = "django-anymail"
-version = "13.1"
+version = "12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "requests" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a3/a5/258d7b7bc1b0ca91791c25c704fa4c2d500727d0c3e29843c182f9f9c4be/django_anymail-13.1.tar.gz", hash = "sha256:b51783176f8a8382e958808151551558e4a46d1375fbc343742d1ebd06ce8e9e", size = 96518, upload-time = "2025-09-03T20:00:21.071Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/91/cd/34eca54757511df252ae8b56f5b75f3d137cc51ba53c7c5c74b8d449fa0d/django_anymail-12.0.tar.gz", hash = "sha256:65789c1b0f42915aa0450a4f173f77572d4c552979b748ddd8125af41972ad30", size = 95175, upload-time = "2024-09-09T19:30:00.181Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/ba/d34a011cb8da04ed4a7c60b9a7aa25eed61348d1f6113af66ba725b56ae4/django_anymail-13.1-py3-none-any.whl", hash = "sha256:63e48402ec8258f17640eb73c8c64141f16d2f8ae7d448d0fb1c66e82b7cbcf6", size = 134063, upload-time = "2025-09-03T20:00:19.427Z" },
-]
-
-[package.optional-dependencies]
-sendgrid = [
-    { name = "cryptography" },
+    { url = "https://files.pythonhosted.org/packages/3d/09/83c613d8781d56af7b8736c7c968f8dc0487763b2680ae9d726a7313c9de/django_anymail-12.0-py3-none-any.whl", hash = "sha256:de8458d713d0f9776da9ed04dcd3a0161be23e9ecbcb49dcf149219700ecd274", size = 131312, upload-time = "2024-09-09T19:29:58.528Z" },
 ]
 
 [[package]]
@@ -1426,7 +1421,7 @@ dependencies = [
     { name = "crispy-bootstrap5" },
     { name = "django" },
     { name = "django-allauth", extra = ["mfa"] },
-    { name = "django-anymail", extra = ["sendgrid"] },
+    { name = "django-anymail" },
     { name = "django-auto-prefetch" },
     { name = "django-celery-beat" },
     { name = "django-cors-headers" },
@@ -1504,7 +1499,7 @@ requires-dist = [
     { name = "crispy-bootstrap5", specifier = "==2025.6" },
     { name = "django", specifier = "==5.2.8" },
     { name = "django-allauth", extras = ["mfa"], specifier = "==65.13.0" },
-    { name = "django-anymail", extras = ["sendgrid"], specifier = "==13.1" },
+    { name = "django-anymail", extras = ["brevo"], specifier = "==12.0" },
     { name = "django-auto-prefetch", specifier = "==1.9.0" },
     { name = "django-celery-beat", specifier = "==2.8.1" },
     { name = "django-cors-headers", specifier = "==4.9.0" },
