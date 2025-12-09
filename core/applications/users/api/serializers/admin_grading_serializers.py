@@ -119,17 +119,12 @@ class GradeScaleSerializer(serializers.ModelSerializer):
 
 class GradeScaleBulkCreateSerializer(serializers.Serializer):
     """
-    Serializer for bulk creating multiple grade scales.
-    Used during school setup to create entire grading system at once.
-
-    Example:
-        {
-            "scales": [
-                {"grade": "A", "min_score": 75, "max_score": 100, "point": 5.0},
-                {"grade": "B", "min_score": 70, "max_score": 74, "point": 4.0},
-                ...
-            ]
-        }
+    Serializer for bulk creating or updating multiple grade scales (UPSERT).
+    Ensures:
+    - Existing grades are UPDATED, not duplicated
+    - New grades are CREATED
+    - Gaps and overlaps are validated
+    - System remains consistent
     """
 
     scales = serializers.ListField(
@@ -141,40 +136,21 @@ class GradeScaleBulkCreateSerializer(serializers.Serializer):
 
     def validate_scales(self, value):
         """
-        Validate all grade scales collectively.
-
-        Ensures:
-        1. No overlapping score ranges
-        2. Complete coverage from 0 to 100
-        3. Unique grade names
-        4. Proper ordering (highest grade first)
-
-        Args:
-            value (list): List of grade scale dictionaries
-
-        Returns:
-            list: Validated scales
-
-        Raises:
-            serializers.ValidationError: If validation fails
+        Collective validation of all grade scales.
         """
         grades = set()
 
-        # Sort by min_score for validation
+        # Sort by min_score
         sorted_scales = sorted(value, key=lambda x: x["min_score"])
 
-        # Check for coverage from 0 to 100
-        if sorted_scales[0]["min_score"] > 0:
-            raise serializers.ValidationError(
-                _("First grade scale must start at score 0")
-            )
+        # Must start at 0
+        if sorted_scales[0]["min_score"] != 0:
+            raise serializers.ValidationError(_("First grade scale must start at 0"))
 
-        if sorted_scales[-1]["max_score"] < 100:
-            raise serializers.ValidationError(
-                _("Last grade scale must end at score 100")
-            )
+        # Must end at 100
+        if sorted_scales[-1]["max_score"] != 100:
+            raise serializers.ValidationError(_("Last grade scale must end at 100"))
 
-        # Check for gaps and overlaps
         previous_max = -1
         for i, scale in enumerate(sorted_scales):
             min_score = scale["min_score"]
@@ -182,25 +158,27 @@ class GradeScaleBulkCreateSerializer(serializers.Serializer):
             grade = scale["grade"]
 
             # Check for gaps
-            if min_score > previous_max + 1:
+            if min_score != previous_max + 1:
                 raise serializers.ValidationError(
-                    _("Gap in score range between %(prev)d and %(next)d")
-                    % {"prev": previous_max, "next": min_score}
+                    _("Gap in score range between %(prev)d and %(next)d") % {
+                        "prev": previous_max,
+                        "next": min_score
+                    }
                 )
 
-            # Check for overlaps
+            # Overlaps
             if min_score <= previous_max:
                 raise serializers.ValidationError(
                     _("Overlap in score ranges at scale %(index)d") % {"index": i + 1}
                 )
 
-            # Check grade uniqueness
+            # Duplicate grades within payload
             if grade in grades:
                 raise serializers.ValidationError(
                     _("Duplicate grade '%(grade)s' found") % {"grade": grade}
                 )
-            grades.add(grade)
 
+            grades.add(grade)
             previous_max = max_score
 
         return value
@@ -208,38 +186,34 @@ class GradeScaleBulkCreateSerializer(serializers.Serializer):
     @transaction.atomic
     def create(self, validated_data):
         """
-        Bulk create grade scales in a single transaction.
-
-        Args:
-            validated_data (dict): Validated serializer data
-
-        Returns:
-            dict: Dictionary containing created grade scales
+        UPSERT (Update-or-Create) bulk logic.
         """
         request = self.context["request"]
         school = request.user.school
 
-        # Deactivate existing grade scales
-        GradeScale.objects.filter(school=school, is_active=True).update(is_active=False)
-
-        # Create new grade scales
         scales = []
-        for idx, scale_data in enumerate(validated_data["scales"]):
-            scale = GradeScale.objects.create(
+
+        for index, scale_data in enumerate(validated_data["scales"]):
+
+            obj, created = GradeScale.objects.update_or_create(
                 school=school,
-                grade=scale_data["grade"],
-                display_name=scale_data.get("display_name"),
-                min_score=scale_data["min_score"],
-                max_score=scale_data["max_score"],
-                point=scale_data["point"],
-                remark=scale_data.get("remark", ""),
-                is_honors=scale_data.get("is_honors", False),
-                order=idx,
-                is_active=True,
+                grade=scale_data["grade"],                     # Unique per school
+                is_honors=scale_data.get("is_honors", False),  # Part of unique key
+                defaults={
+                    "display_name": scale_data.get("display_name"),
+                    "min_score": scale_data["min_score"],
+                    "max_score": scale_data["max_score"],
+                    "point": scale_data["point"],
+                    "remark": scale_data.get("remark", ""),
+                    "order": index,
+                    "is_active": True,
+                }
             )
-            scales.append(scale)
+
+            scales.append(obj)
 
         return {"scales": scales}
+
 
 
 class DefaultGradingSystemSerializer(serializers.Serializer):

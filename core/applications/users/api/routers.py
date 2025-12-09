@@ -1,4 +1,5 @@
 from django.conf import settings
+from core.applications.users.api.views.admin_accessment_views import AssessmentPolicyViewSet, AssessmentTypeViewSet
 from rest_framework.routers import DefaultRouter, SimpleRouter
 
 
@@ -15,6 +16,8 @@ from core.applications.users.api.views.admin_grading_views import (
 )
 
 from core.applications.users.api.views.views import UserViewSet
+
+
 
 
 PREFIX = "users"
@@ -36,6 +39,9 @@ router.register("academic-terms", AcademicTermViewSet, basename="academic-terms"
 router.register("subjects", SubjectViewSet, basename="subjects")
 router.register("teachers", TeacherViewSet, basename="teachers")
 router.register("grade-scales", GradeScaleViewSet, basename="grade-scales")
+router.register("accessment-policy", AssessmentPolicyViewSet, basename="accessment-policy" )
+router.register("accessment-type", AssessmentTypeViewSet, basename="accessment-type")
+
 
 # 2. Generic/catch-all path LAST
 router.register("", UserViewSet, basename="users")
