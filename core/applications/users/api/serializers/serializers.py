@@ -113,9 +113,12 @@ class BaseRoleCreateSerializer(UserCreateSerializer):
                 extracted[field] = attrs.pop(field)
         self._profile_data = {k: v for k, v in extracted.items() if v not in ("", None)}
 
-        # 3. Extract school values
+        # 3. Extract school values and validate
         self._school_code = attrs.pop("school_code", None)
         self._school_id = attrs.pop("school_id", None)
+
+        # Validate school assignment based on role
+        self._validate_school_assignment()
 
         # 4. Run Djoser's validation (email uniqueness, password rules, etc.)
         attrs = super().validate(attrs)
@@ -125,6 +128,34 @@ class BaseRoleCreateSerializer(UserCreateSerializer):
             raise CustomError.BadRequest({"re_password": "Passwords do not match."})
 
         return attrs
+
+    def _validate_school_assignment(self):
+        """Validate school code/school_id based on user role"""
+        if self.role in [UserRole.STUDENT, UserRole.TEACHER]:
+            if not self._school_code:
+                raise CustomError.BadRequest({"school_code": "This field is required."})
+
+            # Validate school code exists
+            if not School.objects.filter(school_code=self._school_code).exists():
+                raise CustomError.NotFound({"school_code": "Invalid school code."})
+
+        elif self.role == UserRole.ADMIN:
+            # Super Admin assigns via school_id
+            if self._school_id:
+                if not School.objects.filter(id=self._school_id).exists():
+                    raise CustomError.NotFound({"school_id": "Invalid school ID."})
+
+            # Regular admin via school_code
+            elif self._school_code:
+                if not School.objects.filter(school_code=self._school_code).exists():
+                    raise CustomError.NotFound({"school_code": "Invalid school code."})
+
+            else:
+                raise CustomError.BadRequest(
+                    {
+                        "school": "Provide either school_id (owner) or school_code (admin).",
+                    },
+                )
 
     # ---------------------------------------
     # CREATE USER + SCHOOL + PROFILE
@@ -139,13 +170,7 @@ class BaseRoleCreateSerializer(UserCreateSerializer):
         # SCHOOL ASSIGNMENT LOGIC
         # -----------------------------------
         if self.role in [UserRole.STUDENT, UserRole.TEACHER]:
-            if not self._school_code:
-                raise CustomError.BadRequest({"school_code": "This field is required."})
-
             school = School.objects.filter(school_code=self._school_code).first()
-            if not school:
-                raise CustomError.NotFound({"school_code": "Invalid school_code."})
-
             user.school = school
 
             # optional status field
@@ -156,23 +181,12 @@ class BaseRoleCreateSerializer(UserCreateSerializer):
             # Super Admin assigns via school_id
             if self._school_id:
                 school = School.objects.filter(id=self._school_id).first()
-                if not school:
-                    raise CustomError.NotFound({"school_id": "Invalid school_id"})
                 user.school = school
 
             # Regular admin via school_code
             elif self._school_code:
                 school = School.objects.filter(school_code=self._school_code).first()
-                if not school:
-                    raise CustomError.NotFound({"school_code": "Invalid school_code"})
                 user.school = school
-
-            else:
-                raise CustomError.BadRequest(
-                    {
-                        "school": "Provide either school_id (owner) or school_code (admin).",
-                    },
-                )
 
         # Save user fields
         update_fields = ["role"]
@@ -303,8 +317,6 @@ class CustomAdminCreateSerializer(BaseRoleCreateSerializer):
             "position",
             "school_name",
         )
-
-
 class OSNameSchema(BaseModelNoDefs):
     Android: Literal["Android"] | None = None
     iOS: Literal["iOS", "iPadOS"] | None = None  # noqa: N815

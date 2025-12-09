@@ -47,3 +47,35 @@ class IsPrincipalOrSchoolOwner(BasePermission):
             AdminType.PRINCIPAL,
             AdminType.SCHOOL_OWNER,
         ]
+
+
+
+class CanManageSubjects(BasePermission):
+    """
+    Teachers + Admins can:
+      - create
+      - update
+
+    Admins ONLY can delete.
+    Students = read only.
+    """
+
+    def has_permission(self, request, view):
+        user = request.user
+
+        if not user.is_authenticated:
+            return False
+
+        # Read-only allowed for everyone
+        if view.action in ["list", "retrieve"]:
+            return True
+
+        # Teachers & admins can modify
+        if view.action in ["create", "update", "partial_update"]:
+            return user.role in [UserRole.ADMIN, UserRole.TEACHER]
+
+        # Only admin can delete
+        if view.action == "destroy":
+            return user.role == UserRole.ADMIN
+
+        return False

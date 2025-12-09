@@ -92,8 +92,11 @@ THIRD_PARTY_APPS = [
 
 LOCAL_APPS = [
     "core.applications.users",
-    "core.applications.timetable",
     "core.applications.academics",
+    "core.applications.grading",
+    "core.applications.results",
+    "core.applications.notifications",
+    "core.applications.reports",
     # Your stuff: custom apps go here
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps

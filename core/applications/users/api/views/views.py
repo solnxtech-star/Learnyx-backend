@@ -32,6 +32,7 @@ from rest_framework_simplejwt.settings import api_settings
 
 from core.applications.users.api.schemas import user_schema
 from core.applications.users.api.serializers.serializers import (
+    CustomAdminCreateSerializer,
     CustomTeacherCreateSerializer,
 )
 from core.applications.users.api.serializers.serializers import (
@@ -472,7 +473,10 @@ class UserViewSet(ModelViewSet):
         user = serializer.instance
 
         return Response(
-            {"message": "Student registered successfully", "user_id": user.id},
+            {
+                "message": "Student registered successfully Check your mail to Activate",
+                "user_id": user.id,
+            },
             status=status.HTTP_201_CREATED,
         )
 

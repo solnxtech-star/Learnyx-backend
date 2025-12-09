@@ -37,13 +37,21 @@ urlpatterns += [
     # API base url
     # path("api/", include("config.api_router")),
     path(
-        "users/",
+        "api/users/",
         include("core.applications.users.api.routers", namespace="users-api"),
     ),
-    path(
-        "api/timetable/",
-        include("core.applications.timetable.urls", namespace="timetable"),
-    ),
+    # path(
+    #     "api/timetable/",
+    #     include("core.applications.timetable.urls", namespace="timetable"),
+    # ),
+    # path(
+    #     "api/accessments/",
+    #     include("core.applications.accessments.api.routers", namespace="accessments"),
+    # ),
+    # path(
+    #     "api/academics/",
+    #     include("core.applications.academics.api.routers", namespace="academics"),
+    # ),
     # DRF auth token
     path("api/auth-token/", obtain_auth_token, name="obtain_auth_token"),
     path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),

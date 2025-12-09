@@ -9,6 +9,7 @@ from .forms import UserAdminCreationForm
 from .models import School
 from .models import StudentProfile
 from .models import TeacherProfile
+from .models import AdminProfile
 from .models import User
 
 if settings.DJANGO_ADMIN_FORCE_ALLAUTH:
@@ -39,7 +40,7 @@ class UserAdmin(auth_admin.UserAdmin):
         ),
         (_("Important dates"), {"fields": ("last_login",)}),
     )
-    list_display = ["id", "email", "name", "role", "is_superuser"]
+    list_display = ["id", "school", "email", "name", "role", "is_superuser"]
     search_fields = ["name"]
     ordering = ["id"]
     add_fieldsets = (
@@ -79,4 +80,11 @@ class TeacherProfileAdmin(admin.ModelAdmin):
 class SchoolAdmin(admin.ModelAdmin):
     list_display = ["id", "name", "slug", "school_code"]
     search_fields = ["name"]
+    ordering = ["id"]
+
+
+@admin.register(AdminProfile)
+class AdminProfileAdmin(admin.ModelAdmin):
+    list_display = ["id", "user", "admin_type"]
+    search_fields = ["user__email", "user__name", "admin_type"]
     ordering = ["id"]

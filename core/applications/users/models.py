@@ -120,12 +120,7 @@ class BaseProfile(TimeStampedModel):
     - Approval workflow fields (status, approved_by)
     """
 
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="%(class)s_profile",
-        help_text=_("The user linked to this profile."),
-    )
+
 
     status = models.CharField(
         max_length=20,
@@ -158,7 +153,11 @@ class AdminProfile(BaseProfile):
     - Admin type (School Owner, Principal, etc.)
     - Optional organizational attributes
     """
-
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="adminprofile",
+    )
     admin_type = models.CharField(
         max_length=50,
         choices=AdminType.choices,
@@ -188,14 +187,26 @@ class TeacherProfile(BaseProfile):
     and departmental information.
     """
 
-    classroom = auto_prefetch.ForeignKey(
-        "academics.ClassRoom",
-        on_delete=models.SET_NULL,
-        related_name="teachers",
-        null=True,
-        blank=True,
-        help_text=_("Classroom assigned to this teacher."),
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="teacherprofile",
     )
+
+    classrooms = models.ManyToManyField(
+        "academics.ClassRoom",
+        related_name="teachers",
+        blank=True,
+        help_text=_("Classrooms assigned to this teacher."),
+    )
+
+    subjects = models.ManyToManyField(
+        "academics.Subject",
+        related_name="teachers",
+        blank=True,
+        help_text=_("Subjects this teacher can teach."),
+    )
+
     staff_id = models.CharField(_("Staff ID"), max_length=50, unique=True)
     qualification = models.CharField(max_length=100, blank=True, null=True)
     specialization = models.CharField(max_length=100, blank=True, null=True)
@@ -205,12 +216,17 @@ class TeacherProfile(BaseProfile):
         return f"Teacher: {self.user.name or self.user.email}"
 
 
+
 class StudentProfile(BaseProfile):
     """
     Extended student profile used for managing
     academic data, guardian details and admission status.
     """
-
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="studentprofile",
+    )
     classroom = auto_prefetch.ForeignKey(
         "academics.ClassRoom",
         on_delete=models.SET_NULL,
@@ -250,6 +266,11 @@ class StudentProfile(BaseProfile):
 
 
 class ParentProfile(BaseProfile):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="parentprofile",
+    )
     occupation = models.CharField(max_length=100, blank=True, null=True)
     address = models.CharField(max_length=255, blank=True, null=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
