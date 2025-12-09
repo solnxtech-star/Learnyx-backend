@@ -1,3 +1,4 @@
+from core.applications.users.api.serializers.admin_accessment_serializers import AssessmentPolicySerializer, DefaultAssessmentPolicySerializer
 from drf_spectacular.utils import OpenApiParameter
 from drf_spectacular.utils import OpenApiResponse
 from drf_spectacular.utils import OpenApiTypes
@@ -857,3 +858,169 @@ GRADE_SCALE_ACTION_SCHEMAS = {
         responses={200: OpenApiResponse(description="Grades reordered successfully")},
     ),
 }
+
+
+
+AssessmentPolicySchema = extend_schema_view(
+    list=extend_schema(
+        summary="List assessment policies",
+        description="""
+Retrieve all assessment policies that belong to the authenticated user's school.
+
+What happens:
+- Teachers can view, but cannot create or edit.
+- Filters by the requesting user's school automatically.
+- Supports search and ordering.
+"""
+    ),
+    retrieve=extend_schema(
+        summary="Retrieve a single assessment policy",
+        description="""
+Fetch one AssessmentPolicy and its nested AssessmentTypes.
+
+What happens:
+- Ensures the policy belongs to the user's school.
+- Returns full policy details including CA/exam weights.
+"""
+    ),
+    create=extend_schema(
+        summary="Create a new assessment policy",
+        description="""
+Admins can create AssessmentPolicy.
+
+Validation:
+- ca_weight + exam_weight must equal 100
+- Automatically attaches the policy to the user's school
+
+What happens internally:
+1. Serializer validates and enforces weight rules.
+2. perform_create() attaches school.
+3. Returns the created policy with nested types = [] initially.
+"""
+    ),
+    update=extend_schema(
+        summary="Update an assessment policy",
+        description="""
+Admins only. Updates policy fields.
+
+What happens:
+- Serializer validates again.
+- School is forced to remain the same (cannot be changed).
+"""
+    ),
+    partial_update=extend_schema(
+        summary="Partially update assessment policy",
+        description="Same as update, but allows updating only part of the fields."
+    ),
+    destroy=extend_schema(
+        summary="Delete an assessment policy",
+        description="""
+Hard delete. (Not soft-deleted.)
+
+What happens:
+- Ensures policy belongs to user's school.
+- Deletes the policy and its related types.
+"""
+    ),
+)
+
+# ---------------------------------------------------------------------
+# Custom Actions Documentation
+# ---------------------------------------------------------------------
+
+ApplyDefaultPolicySchema = extend_schema(
+    request=DefaultAssessmentPolicySerializer,
+    responses={201: OpenApiResponse(description="Created default assessment policy")},
+    summary="Create default assessment policy",
+    description="""
+Creates a pre-configured default set of AssessmentTypes under a new AssessmentPolicy.
+
+Request Body:
+{
+    "term": <term_id>,
+    "config_type": "standard_60_40" | "half_term" | "detailed",
+    "policy_name": "Custom name"
+}
+
+What happens internally:
+1. Serializer validates configuration.
+2. Any active policy for that term gets deactivated.
+3. A new AssessmentPolicy is created.
+4. Default AssessmentTypes for the chosen config_type are created atomically.
+5. Returns the fully built policy with all types included.
+"""
+)
+
+ActivePolicyForTermSchema = extend_schema(
+    parameters=[
+        OpenApiParameter(
+            name="term",
+            description="AcademicTerm ID to fetch active policy for",
+            required=False,
+            type=int
+        ),
+    ],
+    responses={200: AssessmentPolicySerializer},
+    summary="Get active policy for a term",
+    description="""
+Fetch the currently active AssessmentPolicy for a specific term.
+
+Usage:
+- /assessment-policies/active-for-term/?term=<term_id>
+
+What happens:
+- If a term is provided, return that term’s active policy.
+- If no term is provided, return all active policies across the school.
+- If no active policy exists → returns 404.
+"""
+)
+
+# ---------------------------------------------------------------------
+# AssessmentType Schema Documentation
+# ---------------------------------------------------------------------
+
+AssessmentTypeSchema = extend_schema_view(
+    list=extend_schema(
+        summary="List assessment types",
+        description="""
+List all AssessmentType objects.
+
+Features:
+- Supports filtering by ?policy=<policy_id>
+- Only returns types belonging to current user's school
+"""
+    ),
+    retrieve=extend_schema(
+        summary="Retrieve a single assessment type",
+        description="Return details for a single AssessmentType."
+    ),
+    create=extend_schema(
+        summary="Create a new assessment type",
+        description="""
+Admins only.
+
+Validation rules:
+- weight must not cause total policy weight to exceed 100%
+- policy must belong to current user's school
+
+What happens:
+1. Serializer validates.
+2. perform_create() prevents cross-school type insertion.
+3. Type is created under the policy.
+"""
+    ),
+    update=extend_schema(
+        summary="Update assessment type",
+        description="""
+Admins only.
+
+What happens:
+- Ensures a type cannot be moved to a policy of another school.
+- Enforces weight constraints again.
+"""
+    ),
+    destroy=extend_schema(
+        summary="Delete an assessment type",
+        description="Hard delete an AssessmentType."
+    ),
+)

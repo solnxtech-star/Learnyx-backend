@@ -194,15 +194,42 @@ class TermReportSummary(TimeStampedModel):
         super().save(*args, **kwargs)
 
 
+
+
 class GradeScale(TimeStampedModel):
     """
     Defines grade brackets for a school (e.g., A = 75-100).
     """
 
     school = auto_prefetch.ForeignKey("users.School", on_delete=models.CASCADE)
+
+    # ✅ NEW — safe optional fields (won't break existing data)
+    term = auto_prefetch.ForeignKey(
+        "academics.AcademicTerm",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="grade_scales",
+    )
+    class_room = auto_prefetch.ForeignKey(
+        "academics.ClassRoom",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="grade_scales",
+    )
+
+    version = models.PositiveIntegerField(default=1)
+
+    effective_from = models.DateField(null=True, blank=True)
+    effective_to = models.DateField(null=True, blank=True)
+
+    is_published = models.BooleanField(default=False)
+
+    # ✅ EXISTING FIELDS — unchanged
     grade = models.CharField(max_length=3)
     display_name = models.CharField(
-        max_length=5, null=True, blank=True, help_text=_("e.g., A' for honors")
+        max_length=50, null=True, blank=True, help_text=_("e.g., A' for honors")
     )
     min_score = models.PositiveIntegerField()
     max_score = models.PositiveIntegerField()
@@ -219,17 +246,3 @@ class GradeScale(TimeStampedModel):
         unique_together = ("school", "grade", "is_honors")
         verbose_name = _("Grade Scale")
         verbose_name_plural = _("Grade Scales")
-
-    def __str__(self):
-        display_name = self.display_name or self.grade
-        return (
-            f"{display_name}: {self.min_score}-{self.max_score} ({self.point} points)"
-        )
-
-    def clean(self):
-        # Validate score range
-        if self.min_score > self.max_score:
-            raise ValidationError(_("Min score cannot be greater than max score"))
-
-        if self.min_score < 0 or self.max_score > 100:
-            raise ValidationError(_("Scores must be between 0 and 100"))

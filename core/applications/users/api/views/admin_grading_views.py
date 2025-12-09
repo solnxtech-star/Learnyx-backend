@@ -271,63 +271,85 @@ class ClassRoomViewSet(ModelViewSet):
 @GRADING_SCHEMA
 class GradeScaleViewSet(ModelViewSet):
     """
-    Handles creation, retrieval, and management of grading scales
-    for the authenticated user's school.
+    API endpoint for managing grading scales for a school.
 
-    Permissions:
-    - Principals & School Owners: full access
-    - Teachers: read-only
+    Access Control:
+    - Principals & School Owners → full CRUD + bulk operations
+    - Teachers → read-only access
     """
 
     serializer_class = GradeScaleSerializer
     permission_classes = [IsPrincipalOrSchoolOwner]
 
-    # ---------------------------
+    # ---------------------------------------------------------
     # Queryset
-    # ---------------------------
+    # ---------------------------------------------------------
     def get_queryset(self):
-        """Return only grade scales belonging to the user's school."""
+        """
+        Return grade scales belonging to the authenticated user's school.
+        Ordered by highest max_score first, then by custom order.
+        """
         user = self.request.user
-        return GradeScale.objects.filter(school=user.school).order_by(
-            "-max_score", "order"
+        school = getattr(user, "school", None)
+
+        if not school:
+            return GradeScale.objects.none()
+
+        return (
+            GradeScale.objects.filter(school=school)
+            .order_by("-max_score", "order")
         )
 
     def perform_create(self, serializer):
+        """Auto-attach school when creating a grade scale."""
         serializer.save(school=self.request.user.school)
 
     def perform_update(self, serializer):
+        """Prevent tampering with school during update."""
         serializer.save(school=self.request.user.school)
 
-    # ---------------------------
-    # Bulk create
-    # ---------------------------
+    # ---------------------------------------------------------
+    # Bulk Create
+    # ---------------------------------------------------------
     @GRADE_SCALE_ACTION_SCHEMAS["bulk_create"]
     @action(detail=False, methods=["post"], url_path="bulk-create")
     @transaction.atomic
     def bulk_create(self, request):
+        """
+        Create multiple grading scales in a single request.
+        Existing scales are not modified.
+        """
         serializer = GradeScaleBulkCreateSerializer(
-            data=request.data, context={"request": request}
+            data=request.data,
+            context={"request": request},
         )
-        serializer.is_valid(raise_exception=True)
 
+        serializer.is_valid(raise_exception=True)
         result = serializer.create(serializer.validated_data)
         created_scales = result.get("scales", [])
 
-        out = GradeScaleSerializer(created_scales, many=True).data
         return Response(
-            {"message": f"Created {len(created_scales)} grade scales.", "scales": out},
+            {
+                "message": f"{len(created_scales)} grade scales created successfully.",
+                "scales": GradeScaleSerializer(created_scales, many=True).data,
+            },
             status=status.HTTP_201_CREATED,
         )
 
-    # ---------------------------
-    # Apply default system
-    # ---------------------------
+    # ---------------------------------------------------------
+    # Apply Default Grading System
+    # ---------------------------------------------------------
     @GRADE_SCALE_ACTION_SCHEMAS["apply_default"]
     @action(detail=False, methods=["post"], url_path="apply-default")
     @transaction.atomic
     def apply_default(self, request):
+        """
+        Apply a preset grading system. Deactivates existing active scales,
+        then creates a new set based on system_name.
+        """
         serializer = DefaultGradingSystemSerializer(
-            data=request.data, context={"request": request}
+            data=request.data,
+            context={"request": request},
         )
         serializer.is_valid(raise_exception=True)
 
@@ -335,8 +357,11 @@ class GradeScaleViewSet(ModelViewSet):
         default_scales = serializer.get_default_scales(system_name)
 
         school = request.user.school
+
+        # deactivate all existing
         GradeScale.objects.filter(school=school, is_active=True).update(is_active=False)
 
+        # create new defaults
         created = []
         for idx, s in enumerate(default_scales):
             created.append(
@@ -354,69 +379,89 @@ class GradeScaleViewSet(ModelViewSet):
                 )
             )
 
-        out = GradeScaleSerializer(created, many=True).data
         return Response(
-            {"message": f"Applied '{system_name}' system", "scales": out},
+            {
+                "message": f"Applied grading system '{system_name}'.",
+                "scales": GradeScaleSerializer(created, many=True).data,
+            },
             status=status.HTTP_200_OK,
         )
 
-    # ---------------------------
+    # ---------------------------------------------------------
     # Activate / Deactivate
-    # ---------------------------
+    # ---------------------------------------------------------
     @GRADE_SCALE_ACTION_SCHEMAS["activate"]
     @action(detail=True, methods=["post"], url_path="activate")
     def activate(self, request, pk=None):
+        """Activate a specific grade scale."""
         obj = get_object_or_404(self.get_queryset(), pk=pk)
         obj.is_active = True
         obj.save(update_fields=["is_active"])
-        return Response({"message": f"Activated grade '{obj.grade}'."})
+
+        return Response({"message": f"Grade '{obj.grade}' activated."})
 
     @GRADE_SCALE_ACTION_SCHEMAS["deactivate"]
     @action(detail=True, methods=["post"], url_path="deactivate")
     def deactivate(self, request, pk=None):
+        """Deactivate a specific grade scale."""
         obj = get_object_or_404(self.get_queryset(), pk=pk)
         obj.is_active = False
         obj.save(update_fields=["is_active"])
-        return Response({"message": f"Deactivated grade '{obj.grade}'."})
 
-    # ---------------------------
-    # Reset
-    # ---------------------------
+        return Response({"message": f"Grade '{obj.grade}' deactivated."})
+
+    # ---------------------------------------------------------
+    # Reset (Deactivate All)
+    # ---------------------------------------------------------
     @GRADE_SCALE_ACTION_SCHEMAS["reset"]
     @action(detail=False, methods=["post"], url_path="reset")
     def reset(self, request):
+        """
+        Deactivate all grading scales for the school.
+        Does not delete any scale.
+        """
         school = request.user.school
         GradeScale.objects.filter(school=school, is_active=True).update(is_active=False)
+
         return Response(
             {"message": "All grade scales have been deactivated."},
-            status=status.HTTP_204_NO_CONTENT,
+            status=status.HTTP_200_OK,
         )
 
-    # ---------------------------
-    # Reorder
-    # ---------------------------
+    # ---------------------------------------------------------
+    # Reorder Grade Scales
+    # ---------------------------------------------------------
     @GRADE_SCALE_ACTION_SCHEMAS["reorder"]
     @action(detail=False, methods=["post"], url_path="reorder")
+    @transaction.atomic
     def reorder(self, request):
+        """
+        Update the ordering of grade scales.
+        Expects { "order": [id1, id2, id3...] }
+        """
         order_list = request.data.get("order")
 
         if not isinstance(order_list, list):
             return Response(
-                {"detail": "'order' must be a list of IDs."},
+                {"detail": "Field 'order' must be a list of grade scale IDs."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        qs = GradeScale.objects.filter(school=request.user.school, id__in=order_list)
-        existing_ids = set(qs.values_list("id", flat=True))
-        missing = [i for i in order_list if i not in existing_ids]
+        school_qs = GradeScale.objects.filter(
+            school=request.user.school,
+            id__in=order_list
+        )
 
-        if missing:
+        existing_ids = set(school_qs.values_list("id", flat=True))
+        missing_ids = [i for i in order_list if i not in existing_ids]
+
+        if missing_ids:
             return Response(
-                {"detail": f"Invalid IDs (not in school): {missing}"},
+                {"detail": f"Invalid grade scale IDs: {missing_ids}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        for idx, gs_id in enumerate(order_list):
-            GradeScale.objects.filter(pk=gs_id).update(order=idx)
+        for index, gs_id in enumerate(order_list):
+            GradeScale.objects.filter(pk=gs_id).update(order=index)
 
-        return Response({"message": "Reordered grade scales."})
+        return Response({"message": "Grade scales reordered successfully."})
