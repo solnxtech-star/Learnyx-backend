@@ -1,8 +1,11 @@
-from core.applications.academics.models import TeachingAssignment
-from rest_framework.permissions import BasePermission, SAFE_METHODS
-from typing import Optional
+from rest_framework.permissions import SAFE_METHODS
+from rest_framework.permissions import BasePermission
 
+from core.applications.academics.models import ClassRoom
+from core.applications.academics.models import TeachingAssignment
+from core.applications.users.models import StudentProfile
 from core.applications.users.models import User
+
 
 class IsPrincipalOrSchoolOwner(BasePermission):
     """
@@ -40,7 +43,7 @@ class IsPrincipalOrSchoolOwnerForPolicies(BasePermission):
     """
 
     def has_permission(self, request, view):
-        user: Optional[User] = getattr(request, "user", None)
+        user: User | None = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return False
 
@@ -56,7 +59,6 @@ class IsPrincipalOrSchoolOwnerForPolicies(BasePermission):
             return admin_profile.admin_type in ["school_owner", "principal"]
 
         return False
-
 
 
 class IsPrincipalOwnerOrAssignedTeacher(BasePermission):
@@ -108,5 +110,63 @@ class IsPrincipalOwnerOrAssignedTeacher(BasePermission):
         return TeachingAssignment.objects.filter(
             id=obj.classroom_subject_id,
             teacher=user,
-            school=user.school
+            school=user.school,
         ).exists()
+
+
+class IsSchoolAdminOrAssignedTeacher(BasePermission):
+    """
+    Enterprise-grade permission for Teacher Dashboard.
+
+    Access Rules:
+    - School Owners & Principals: Full access
+    - Teachers: Limited to assigned classrooms & students
+    - Others: No access
+    """
+
+    def has_permission(self, request, view):
+        user = request.user
+
+        if not user or not user.is_authenticated:
+            return False
+
+        # Admin: School Owner / Principal
+        if user.role == "admin":
+            admin_type = getattr(user.adminprofile, "admin_type", None)
+            return admin_type in ["school_owner", "principal"]
+
+        # Teachers allowed – object level check will restrict
+        if user.role == "teacher":
+            return True
+
+        return False
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+
+        # Admins: always allowed
+        if user.role == "admin":
+            admin_type = getattr(user.adminprofile, "admin_type", None)
+            return admin_type in ["school_owner", "principal"]
+
+        # Teachers
+        if user.role != "teacher":
+            return False
+
+        # If object is a classroom
+        if isinstance(obj, ClassRoom):
+            return TeachingAssignment.objects.filter(
+                teacher=user,
+                classroom=obj,
+                school=user.school,
+            ).exists()
+
+        # If object is a student profile
+        if isinstance(obj, StudentProfile):
+            return TeachingAssignment.objects.filter(
+                teacher=user,
+                classroom=obj.classroom,
+                school=user.school,
+            ).exists()
+
+        return False
