@@ -1,20 +1,18 @@
-from rest_framework import serializers
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
+from rest_framework import serializers
 
-from core.applications.academics.models import (
-    AcademicSession,
-    AcademicTerm,
-    ClassRoom,
-    Subject,
-    TeachingAssignment,
-)
+from core.applications.academics.models import AcademicSession
+from core.applications.academics.models import AcademicTerm
+from core.applications.academics.models import ClassRoom
+from core.applications.academics.models import Subject
+from core.applications.academics.models import TeachingAssignment
 from core.applications.users.models import TeacherProfile
-
 
 # ============================================================================
 # Academic Session Serializer
 # ============================================================================
+
 
 class AcademicSessionSerializer(serializers.ModelSerializer):
     """
@@ -32,8 +30,14 @@ class AcademicSessionSerializer(serializers.ModelSerializer):
     class Meta:
         model = AcademicSession
         fields = [
-            "id", "school", "school_name", "name",
-            "is_active", "term_count", "created_at", "updated_at",
+            "id",
+            "school",
+            "school_name",
+            "name",
+            "is_active",
+            "term_count",
+            "created_at",
+            "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "school"]
 
@@ -42,10 +46,11 @@ class AcademicSessionSerializer(serializers.ModelSerializer):
 
     def validate_name(self, value):
         import re
+
         pattern = r"^\d{4}[/-]\d{4}$"
         if not re.match(pattern, value):
             raise serializers.ValidationError(
-                _("Session must follow YYYY/YYYY or YYYY-YYYY")
+                _("Session must follow YYYY/YYYY or YYYY-YYYY"),
             )
         return value
 
@@ -61,7 +66,7 @@ class AcademicSessionSerializer(serializers.ModelSerializer):
         # If set active, deactivate others
         if validated_data.get("is_active"):
             AcademicSession.objects.filter(
-                school=validated_data["school"]
+                school=validated_data["school"],
             ).update(is_active=False)
 
         return super().create(validated_data)
@@ -70,7 +75,7 @@ class AcademicSessionSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         if validated_data.get("is_active"):
             AcademicSession.objects.filter(
-                school=instance.school
+                school=instance.school,
             ).exclude(id=instance.id).update(is_active=False)
 
         return super().update(instance, validated_data)
@@ -79,6 +84,7 @@ class AcademicSessionSerializer(serializers.ModelSerializer):
 # ============================================================================
 # Academic Term Serializer
 # ============================================================================
+
 
 class AcademicTermSerializer(serializers.ModelSerializer):
     """
@@ -98,9 +104,15 @@ class AcademicTermSerializer(serializers.ModelSerializer):
     class Meta:
         model = AcademicTerm
         fields = [
-            "id", "session", "session_name", "name",
-            "term_type", "is_active", "is_current",
-            "created_at", "updated_at"
+            "id",
+            "session",
+            "session_name",
+            "name",
+            "term_type",
+            "is_active",
+            "is_current",
+            "created_at",
+            "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
@@ -123,7 +135,7 @@ class AcademicTermSerializer(serializers.ModelSerializer):
         # Enforce standard term names
         if name and name not in self.STANDARD_TERMS:
             raise serializers.ValidationError(
-                _(f"Allowed terms are: {', '.join(self.STANDARD_TERMS)}")
+                _(f"Allowed terms are: {', '.join(self.STANDARD_TERMS)}"),
             )
 
         # Prevent duplicates
@@ -133,7 +145,7 @@ class AcademicTermSerializer(serializers.ModelSerializer):
                 qs = qs.exclude(id=self.instance.id)
             if qs.exists():
                 raise serializers.ValidationError(
-                    _(f"'{name}' already exists in this session.")
+                    _(f"'{name}' already exists in this session."),
                 )
 
         return data
@@ -143,7 +155,7 @@ class AcademicTermSerializer(serializers.ModelSerializer):
             session = validated_data["session"]
             if not session.is_active:
                 raise serializers.ValidationError(
-                    _("Cannot activate term under inactive session.")
+                    _("Cannot activate term under inactive session."),
                 )
 
             AcademicTerm.objects.filter(session=session).update(is_active=False)
@@ -155,20 +167,20 @@ class AcademicTermSerializer(serializers.ModelSerializer):
         if validated_data.get("is_active"):
             if not instance.session.is_active:
                 raise serializers.ValidationError(
-                    _("Cannot activate term under inactive session.")
+                    _("Cannot activate term under inactive session."),
                 )
 
             AcademicTerm.objects.filter(
-                session=instance.session
+                session=instance.session,
             ).exclude(id=instance.id).update(is_active=False)
 
         return super().update(instance, validated_data)
 
 
-
 # ============================================================================
 # Academic Structure Setup Serializer (Bulk Setup)
 # ============================================================================
+
 
 class AcademicStructureSetupSerializer(serializers.Serializer):
     """
@@ -199,7 +211,7 @@ class AcademicStructureSetupSerializer(serializers.Serializer):
         session = AcademicSession.objects.create(
             school=school,
             name=validated_data["session_name"],
-            is_active=validated_data["automatic_activation"]
+            is_active=validated_data["automatic_activation"],
         )
 
         terms = []
@@ -209,15 +221,17 @@ class AcademicStructureSetupSerializer(serializers.Serializer):
                     session=session,
                     name=name,
                     term_type="FULL_TERM",
-                    is_active=validated_data["automatic_activation"] and index == 0
-                )
+                    is_active=validated_data["automatic_activation"] and index == 0,
+                ),
             )
 
         return {"session": session, "terms": terms}
 
+
 # ============================================================================
 # Subject Serializer
 # ============================================================================
+
 
 class SubjectSerializer(serializers.ModelSerializer):
     """
@@ -235,9 +249,16 @@ class SubjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subject
         fields = [
-            "id", "school", "school_name", "name", "code",
-            "description", "class_rooms",
-            "is_active", "created_at", "updated_at",
+            "id",
+            "school",
+            "school_name",
+            "name",
+            "code",
+            "description",
+            "class_rooms",
+            "is_active",
+            "created_at",
+            "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "school"]
 
@@ -252,7 +273,7 @@ class SubjectSerializer(serializers.ModelSerializer):
         for classroom in value:
             if classroom.school != school:
                 raise serializers.ValidationError(
-                    _(f"'{classroom.name}' does not belong to your school.")
+                    _(f"'{classroom.name}' does not belong to your school."),
                 )
         return value
 
@@ -274,8 +295,8 @@ class SubjectSerializer(serializers.ModelSerializer):
 
         return subject
 
-# ============================================================================
 
+# ============================================================================
 
 
 class TeacherListSerializer(serializers.ModelSerializer):
@@ -316,18 +337,19 @@ class TeacherDetailSerializer(serializers.ModelSerializer):
     Detailed serializer for retrieving a single teacher profile.
 
     Purpose:
-        - Exposes all public teacher information.
-        - Includes assigned classrooms.
+        - Exposes public teacher information.
+        - Includes assigned classrooms in a safe JSON format.
 
     Returned By Endpoint:
         GET /teachers/<id>/
 
-    Extra Fields:
-        classrooms → Serialized manually via get_classrooms()
+    Notes:
+        This serializer avoids returning raw Django model instances
+        to prevent JSON serialization errors.
     """
 
-    email = serializers.EmailField(source="user.email")
-    classrooms = serializers.SerializerMethodField()
+    email = serializers.EmailField(source="user.email", read_only=True)
+    classrooms = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = TeacherProfile
@@ -348,19 +370,28 @@ class TeacherDetailSerializer(serializers.ModelSerializer):
         Response example:
             [
                 {
-                    "id": UUID,
+                    "id": "uuid",
                     "name": "JSS1A",
-                    "level": "Junior Secondary",
+                    "level": "JSS1",
                     "arm": "A",
+                    "school": {
+                        "id": "uuid",
+                        "name": "Greenfield Academy"
+                    }
                 }
             ]
         """
+
         return [
             {
-                "id": c.id,
-                "name": c.arm,
-                "level": c.school,
-                "arm": c.academic_class,
+                "id": str(c.id),
+                "name": f"{c.academic_class}{c.arm}",
+                "level": c.academic_class,
+                "arm": c.arm,
+                "school": {
+                    "id": str(c.school.id),
+                    "name": c.school.name,
+                },
             }
             for c in obj.classrooms.all()
         ]
@@ -384,7 +415,7 @@ class AdminAssignClassroomsSerializer(serializers.Serializer):
     classroom_ids = serializers.ListField(
         child=serializers.CharField(),
         allow_empty=False,
-        help_text="List of classroom UUIDs to assign to the teacher."
+        help_text="List of classroom UUIDs to assign to the teacher.",
     )
 
     def validate_classroom_ids(self, ids):
@@ -398,7 +429,7 @@ class AdminAssignClassroomsSerializer(serializers.Serializer):
 
         if classrooms.count() != len(ids):
             raise serializers.ValidationError(
-                "Some classrooms do not exist or do not belong to your school."
+                "Some classrooms do not exist or do not belong to your school.",
             )
 
         return ids
@@ -437,7 +468,7 @@ class TeacherCreateTeachingAssignmentsSerializer(serializers.Serializer):
     assignments = serializers.ListField(
         child=serializers.DictField(),
         allow_empty=False,
-        help_text="List of classroom+subject assignment objects."
+        help_text="List of classroom+subject assignment objects.",
     )
 
     def validate_assignments(self, items):
@@ -455,17 +486,17 @@ class TeacherCreateTeachingAssignmentsSerializer(serializers.Serializer):
 
             if not classroom_id or not subject_id:
                 raise serializers.ValidationError(
-                    "Each assignment requires 'classroom' and 'subject'."
+                    "Each assignment requires 'classroom' and 'subject'.",
                 )
 
             if not ClassRoom.objects.filter(id=classroom_id, school=school).exists():
                 raise serializers.ValidationError(
-                    f"Invalid classroom {classroom_id} for this teacher."
+                    f"Invalid classroom {classroom_id} for this teacher.",
                 )
 
             if not Subject.objects.filter(id=subject_id, school=school).exists():
                 raise serializers.ValidationError(
-                    f"Invalid subject {subject_id} for this teacher."
+                    f"Invalid subject {subject_id} for this teacher.",
                 )
 
         return items
@@ -526,13 +557,17 @@ class TeacherReassignTeachingAssignmentSerializer(serializers.Serializer):
             raise serializers.ValidationError("Invalid subject.")
 
         # Duplicate prevention
-        if TeachingAssignment.objects.filter(
-            teacher=teacher,
-            classroom_id=new_classroom,
-            subject_id=new_subject
-        ).exclude(id=assignment.id).exists():
+        if (
+            TeachingAssignment.objects.filter(
+                teacher=teacher,
+                classroom_id=new_classroom,
+                subject_id=new_subject,
+            )
+            .exclude(id=assignment.id)
+            .exists()
+        ):
             raise serializers.ValidationError(
-                "Another assignment with this classroom+subject already exists."
+                "Another assignment with this classroom+subject already exists.",
             )
 
         attrs["new_classroom"] = new_classroom
@@ -567,7 +602,7 @@ class AdminAssignSubjectsSerializer(serializers.Serializer):
     subject_ids = serializers.ListField(
         child=serializers.UUIDField(),
         allow_empty=False,
-        help_text="List of subject UUIDs to assign to the teacher."
+        help_text="List of subject UUIDs to assign to the teacher.",
     )
 
     def validate_subject_ids(self, subject_ids):
@@ -582,7 +617,7 @@ class AdminAssignSubjectsSerializer(serializers.Serializer):
 
         if subjects.count() != len(subject_ids):
             raise serializers.ValidationError(
-                "Some subjects do not exist or do not belong to your school."
+                "Some subjects do not exist or do not belong to your school.",
             )
         return subject_ids
 

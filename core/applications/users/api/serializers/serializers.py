@@ -25,7 +25,6 @@ from core.applications.users.models import TeacherProfile
 from core.applications.users.models import User
 from core.applications.users.token import default_token_generator
 from core.helper.custom_exceptions import CustomError
-from core.helper.enums import AcademicClass
 from core.helper.enums import AdminType
 from core.helper.enums import AdmissionStatus
 from core.helper.enums import Gender
@@ -226,7 +225,7 @@ class BaseRoleCreateSerializer(UserCreateSerializer):
 class CustomUserCreateSerializer(BaseRoleCreateSerializer):
     """
     Student signup serializer.
-    Adds academic fields and classroom assignment.
+    Automatically syncs current_class from classroom.
     """
 
     role = UserRole.STUDENT
@@ -234,7 +233,6 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
 
     profile_fields = [
         "gender",
-        "current_class",
         "guardian_name",
         "guardian_phone",
         "address",
@@ -242,10 +240,6 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
     ]
 
     gender = serializers.ChoiceField(choices=Gender.choices, required=False)
-    current_class = serializers.ChoiceField(
-        choices=AcademicClass.choices,
-        required=False,
-    )
     guardian_name = serializers.CharField(required=False, allow_blank=True)
     guardian_phone = serializers.CharField(required=False, allow_blank=True)
     address = serializers.CharField(required=False, allow_blank=True)
@@ -261,12 +255,46 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
     class Meta(BaseRoleCreateSerializer.Meta):
         fields = BaseRoleCreateSerializer.Meta.fields + (
             "gender",
-            "current_class",
             "guardian_name",
             "guardian_phone",
             "address",
             "classroom_id",
         )
+
+    def validate_classroom_id(self, value):
+        """
+        Ensure classroom exists and belongs to the selected school.
+        """
+        if not value:
+            return None
+
+        request = self.context["request"]
+        school = getattr(request, "school", None) or request.user.school
+
+        try:
+            classroom = ClassRoom.objects.get(id=value, school=school)
+        except ClassRoom.DoesNotExist:
+            raise serializers.ValidationError("Invalid classroom selected.")
+
+        return classroom
+
+    def create_profile(self, user, validated_data):
+        """
+        Creates StudentProfile and auto-syncs current_class.
+        """
+        classroom = validated_data.pop("classroom_id", None)
+
+        profile = StudentProfile.objects.create(
+            user=user,
+            **validated_data,
+        )
+
+        if classroom:
+            profile.classroom = classroom
+            profile.current_class = classroom.academic_class
+            profile.save(update_fields=["classroom", "current_class"])
+
+        return profile
 
 
 class CustomTeacherCreateSerializer(BaseRoleCreateSerializer):
@@ -317,6 +345,8 @@ class CustomAdminCreateSerializer(BaseRoleCreateSerializer):
             "position",
             "school_name",
         )
+
+
 class OSNameSchema(BaseModelNoDefs):
     Android: Literal["Android"] | None = None
     iOS: Literal["iOS", "iPadOS"] | None = None  # noqa: N815
