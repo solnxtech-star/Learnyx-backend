@@ -115,7 +115,7 @@ if TEST_MODE:
     # https://docs.djangoproject.com/en/dev/ref/settings/#default-from-email
     DEFAULT_FROM_EMAIL = env(
         "DJANGO_DEFAULT_FROM_EMAIL",
-        default="Baanza <mastergentility5@gmail.com>",
+        default="Learnyx <mastergentility5@gmail.com>",
     )
 else:
     DEFAULT_FROM_EMAIL = env(
@@ -136,20 +136,28 @@ ACCOUNT_EMAIL_SUBJECT_PREFIX = EMAIL_SUBJECT_PREFIX
 # Django Admin URL regex.
 ADMIN_URL = env("DJANGO_ADMIN_URL")
 
-# Anymail
-# ------------------------------------------------------------------------------
-# https://anymail.readthedocs.io/en/stable/installation/#installing-anymail
-INSTALLED_APPS += ["anymail"]
-# https://docs.djangoproject.com/en/dev/ref/settings/#email-backend
-# https://anymail.readthedocs.io/en/stable/installation/#anymail-settings-reference
-# https://anymail.readthedocs.io/en/stable/esps/sendgrid/
-EMAIL_BACKEND = "anymail.backends.brevo.EmailBackend"
-ANYMAIL = {
-    # "SENDGRID_API_KEY": env("SENDGRID_API_KEY"),
-    # "SENDGRID_API_URL": env("SENDGRID_API_URL", default="https://api.sendgrid.com/v3/"),
-    "BREVO_API_KEY": env("BREVO_API_KEY"),
-    "BREVO_API_URL": env("BREVO_API_URL", default="https://api.brevo.com/v3/"),
-}
+if TEST_MODE:
+    # Anymail
+    # ------------------------------------------------------------------------------
+    # https://anymail.readthedocs.io/en/stable/installation/#installing-anymail
+    INSTALLED_APPS += ["anymail"]
+    # https://docs.djangoproject.com/en/dev/ref/settings/#email-backend
+    # https://anymail.readthedocs.io/en/stable/installation/#anymail-settings-reference
+    # https://anymail.readthedocs.io/en/stable/esps/sendgrid/
+    EMAIL_BACKEND = "anymail.backends.brevo.EmailBackend"
+    ANYMAIL = {
+        # "SENDGRID_API_KEY": env("SENDGRID_API_KEY"),
+        # "SENDGRID_API_URL": env("SENDGRID_API_URL", default="https://api.sendgrid.com/v3/"),
+        "BREVO_API_KEY": env("BREVO_API_KEY"),
+        "BREVO_API_URL": env("BREVO_API_URL", default="https://api.brevo.com/v3/"),
+    }
+else:
+    EMAIL_HOST = env("EMAIL_HOST")
+    EMAIL_PORT = env("EMAIL_PORT")
+    EMAIL_HOST_USER = env("EMAIL_HOST_USER")
+    EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD")
+    EMAIL_USE_SSL = True
+    EMAIL_USE_TLS = False
 
 
 # LOGGING
