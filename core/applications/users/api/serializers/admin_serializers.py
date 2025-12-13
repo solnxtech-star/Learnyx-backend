@@ -1,6 +1,8 @@
+import logging
+
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
-import logging
+
 from core.applications.academics.models import ClassRoom
 from core.applications.users.models import AdminProfile
 from core.applications.users.models import StudentProfile

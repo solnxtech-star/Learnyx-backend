@@ -1,4 +1,6 @@
 from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema
+from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -6,10 +8,13 @@ from rest_framework.response import Response
 
 from core.applications.academics.api.schemas import teachers_dashboard
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
-    ClassroomStudentSerializer,
+    AssessmentEntryCreateSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
-    StudentAssessmentSerializer,
+    AssessmentEntrySerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    ClassroomStudentSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     StudentContactSerializer,
@@ -18,38 +23,55 @@ from core.applications.academics.api.serializers.teachers_dashboard_serializers 
     StudentProfileDetailSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    StudentSubjectResultSerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    SubjectResultSerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     TeacherClassroomSerializer,
 )
 from core.applications.academics.models import AssessmentRecord
 from core.applications.academics.models import ClassRoom
-from core.applications.users.models import StudentContact, TeacherProfile
+from core.applications.grading.models import SubjectResult
+from core.applications.users.models import StudentContact
 from core.applications.users.models import StudentProfile
+from core.applications.users.models import TeacherProfile
 from core.helper.permissions import IsSchoolAdminOrAssignedTeacher
+from core.helper.service import compute_subject_result
 
 
+@extend_schema(tags=["Teacher Dashboard"])
 @teachers_dashboard
 class TeacherDashboardViewSet(viewsets.ViewSet):
     """
-    Unified ViewSet for all teacher dashboard operations.
+    Unified Teacher Dashboard API.
+
+    Responsibilities:
+    - Classroom & student navigation
+    - Assessment entry (WRITE)
+    - Assessment viewing (READ)
+    - Computed subject results
     """
 
     permission_classes = [IsAuthenticated, IsSchoolAdminOrAssignedTeacher]
 
+    # ------------------------------------------------------------------
+    # Utilities
+    # ------------------------------------------------------------------
+
     def _get_teacher(self, user):
-        """
-        Safely resolve the teacher profile for the current user.
-        Raises 404 if user has no TeacherProfile.
-        """
         return get_object_or_404(
             TeacherProfile.objects.select_related("user"),
-            user=user
+            user=user,
         )
+
+    # ------------------------------------------------------------------
+    # DASHBOARD NAVIGATION
+    # ------------------------------------------------------------------
 
     @action(detail=False, methods=["get"], url_path="classes")
     def classes(self, request):
-        """
-        List classrooms assigned to the teacher.
-        """
         teacher = self._get_teacher(request.user)
 
         classrooms = (
@@ -61,8 +83,9 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
             .order_by("academic_class", "arm")
         )
 
-        serializer = TeacherClassroomSerializer(classrooms, many=True)
-        return Response(serializer.data)
+        return Response(
+            TeacherClassroomSerializer(classrooms, many=True).data,
+        )
 
     @action(
         detail=False,
@@ -70,9 +93,6 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
         url_path="classes/(?P<classroom_id>[^/.]+)/students",
     )
     def students(self, request, classroom_id=None):
-        """
-        List students in a specific classroom.
-        """
         students = (
             StudentProfile.objects.select_related("user")
             .filter(
@@ -82,8 +102,11 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
             .order_by("user__name")
         )
 
-        serializer = ClassroomStudentSerializer(students, many=True)
-        return Response(serializer.data)
+        return Response(
+            ClassroomStudentSerializer(students, many=True).data,
+        )
+
+
 
     @action(
         detail=False,
@@ -91,17 +114,48 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
         url_path="students/(?P<student_id>[^/.]+)/profile",
     )
     def student_profile(self, request, student_id=None):
-        """
-        Retrieve detailed profile of a student.
-        """
         student = get_object_or_404(
             StudentProfile.objects.select_related("user"),
             student_id=student_id,
             user__school=request.user.school,
         )
 
-        serializer = StudentProfileDetailSerializer(student)
-        return Response(serializer.data)
+        return Response(
+            StudentProfileDetailSerializer(student).data,
+        )
+
+    # ------------------------------------------------------------------
+    # ASSESSMENT ENTRY (WRITE)
+    # ------------------------------------------------------------------
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="assessments/enter",
+    )
+    def enter_assessment(self, request):
+        """
+        Teacher enters or updates a student's assessment score.
+        Triggers subject result recomputation.
+        """
+
+        serializer = AssessmentEntryCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        record = serializer.save()
+
+        # recompute subject result immediately
+        compute_subject_result(
+            student=record.student,
+            classroom_subject=record.classroom_subject,
+            term=record.term,
+        )
+
+        return Response(
+            AssessmentEntrySerializer(record).data,
+            status=status.HTTP_201_CREATED,
+        )
+
 
     @action(
         detail=False,
@@ -119,8 +173,75 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
         if subject_id:
             qs = qs.filter(classroom_subject__subject_id=subject_id)
 
-        serializer = StudentAssessmentSerializer(qs, many=True)
+        return Response(
+            AssessmentEntrySerializer(qs, many=True).data,
+        )
+
+    # ------------------------------------------------------------------
+    # SUBJECT RESULT (COMPUTED)
+    # ------------------------------------------------------------------
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="students/(?P<student_id>[^/.]+)/subjects/(?P<subject_id>[^/.]+)/result",
+    )
+    def student_subject_result(self, request, student_id=None, subject_id=None):
+        """
+        PRD: Student → Subject → Final computed result
+        """
+
+        result = get_object_or_404(
+            SubjectResult.objects.select_related(
+                "classroom_subject__subject",
+            ),
+            student__student_id=student_id,
+            classroom_subject__subject_id=subject_id,
+            student__user__school=request.user.school,
+        )
+
+        return Response(
+            SubjectResultSerializer(result).data,
+        )
+
+    # ------------------------------------------------------------------
+    # SUBJECT FULL VIEW (ASSESSMENTS + RESULT)
+    # ------------------------------------------------------------------
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="students/(?P<student_id>[^/.]+)/subjects/(?P<subject_id>[^/.]+)",
+    )
+    def student_subject_full(self, request, student_id=None, subject_id=None):
+        """
+        PRD:
+        Student → Subject → Assessments + Computed Result
+        """
+
+        assessments = AssessmentRecord.objects.filter(
+            student__student_id=student_id,
+            classroom_subject__subject_id=subject_id,
+            student__user__school=request.user.school,
+        )
+
+        result = SubjectResult.objects.filter(
+            student__student_id=student_id,
+            classroom_subject__subject_id=subject_id,
+        ).first()
+
+        payload = {
+            "subject": result.classroom_subject.subject.name if result else "",
+            "assessments": assessments,
+            "computed_result": result,
+        }
+
+        serializer = StudentSubjectResultSerializer(payload)
         return Response(serializer.data)
+
+    # ------------------------------------------------------------------
+    # STUDENT CONTACTS
+    # ------------------------------------------------------------------
 
     @action(
         detail=False,
@@ -128,13 +249,11 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
         url_path="students/(?P<student_id>[^/.]+)/contacts",
     )
     def student_contacts(self, request, student_id=None):
-        """
-        Retrieve guardian/contact details for a student.
-        """
         contacts = StudentContact.objects.filter(
             student__student_id=student_id,
             student__user__school=request.user.school,
         ).order_by("-is_primary", "name")
 
-        serializer = StudentContactSerializer(contacts, many=True)
-        return Response(serializer.data)
+        return Response(
+            StudentContactSerializer(contacts, many=True).data,
+        )

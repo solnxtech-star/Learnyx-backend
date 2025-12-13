@@ -4,16 +4,25 @@ from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import extend_schema_view
 
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    AssessmentEntrySerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     ClassroomStudentSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
-    StudentAssessmentSerializer,
+    ResultSnapshotSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     StudentContactSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     StudentProfileDetailSerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    StudentSubjectResultSerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    SubjectResultSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     TeacherClassroomSerializer,
@@ -193,28 +202,44 @@ BulkAssessmentEntrySchema = extend_schema_view(
 
 
 teachers_dashboard = extend_schema_view(
+
+    # =====================================================
+    # STEP 1 — Teacher Dashboard Entry Point
+    # =====================================================
     classes=extend_schema(
-        summary="Get teacher classrooms",
+        summary="List teacher assigned classrooms",
         description=(
-            "Returns a list of classrooms assigned to the logged-in teacher.\n\n"
-            "**Frontend usage:**\n"
-            "Use this endpoint to populate the teacher's classroom list on the dashboard "
-            "or classroom switcher dropdown."
+            "STEP 1: Fetch classrooms assigned to the logged-in teacher.\n\n"
+            "This endpoint returns only classrooms the teacher is allowed to access "
+            "based on teaching assignments and school scope.\n\n"
+            "**Frontend flow:**\n"
+            "1. Call this endpoint immediately after teacher login.\n"
+            "2. Populate the dashboard classroom cards or class switcher dropdown.\n"
+            "3. Use the returned `id` to fetch students in a classroom.\n\n"
+            "**Permissions:** Teacher must be assigned to the classroom."
         ),
         responses={200: TeacherClassroomSerializer(many=True)},
         tags=["Teacher Dashboard"],
     ),
+
+    # =====================================================
+    # STEP 2 — Classroom → Student List
+    # =====================================================
     students=extend_schema(
-        summary="Get students in classroom",
+        summary="List students in a classroom",
         description=(
-            "Returns a list of students enrolled in a specific classroom.\n\n"
-            "**Frontend usage:**\n"
-            "Use this endpoint to render class rosters when a teacher opens a classroom."
+            "STEP 2: Fetch students enrolled in a specific classroom.\n\n"
+            "Returns a lightweight student list suitable for tables and lists.\n\n"
+            "**Frontend flow:**\n"
+            "1. Teacher selects a classroom.\n"
+            "2. Call this endpoint with `classroom_id`.\n"
+            "3. Render student roster (name, ID, email).\n"
+            "4. Clicking a student navigates to the student profile screen."
         ),
         parameters=[
             OpenApiParameter(
                 name="classroom_id",
-                description="Unique ID of the classroom",
+                description="Unique classroom identifier",
                 required=True,
                 location=OpenApiParameter.PATH,
             ),
@@ -222,17 +247,28 @@ teachers_dashboard = extend_schema_view(
         responses={200: ClassroomStudentSerializer(many=True)},
         tags=["Teacher Dashboard"],
     ),
+
+    # =====================================================
+    # STEP 3 — Student Profile Overview
+    # =====================================================
     student_profile=extend_schema(
-        summary="Get detailed student profile",
+        summary="Retrieve student profile details",
         description=(
-            "Returns full profile information of a student.\n\n"
-            "**Frontend usage:**\n"
-            "Use this endpoint when viewing a student's detailed information page."
+            "STEP 3: Fetch full student profile information.\n\n"
+            "Provides demographic and academic placement details for a student.\n\n"
+            "**Frontend flow:**\n"
+            "1. User clicks a student from the classroom list.\n"
+            "2. Call this endpoint using `student_id`.\n"
+            "3. Render student profile header and personal info section.\n\n"
+            "**Use cases:**\n"
+            "- Student profile page\n"
+            "- Teacher review screens\n"
+            "- Admin oversight"
         ),
         parameters=[
             OpenApiParameter(
                 name="student_id",
-                description="Unique student ID",
+                description="Public student identifier",
                 required=True,
                 location=OpenApiParameter.PATH,
             ),
@@ -240,47 +276,147 @@ teachers_dashboard = extend_schema_view(
         responses={200: StudentProfileDetailSerializer},
         tags=["Teacher Dashboard"],
     ),
+
+    # =====================================================
+    # STEP 4 — Raw Assessment Entries
+    # =====================================================
     student_assessments=extend_schema(
-        summary="Get student assessments",
+        summary="Retrieve student assessment entries",
         description=(
-            "Returns all assessment records for a student.\n\n"
-            "**Frontend usage:**\n"
-            "Use this endpoint to render results tables, charts, and performance analytics.\n"
-            "Optional query param: `subject_id` for subject-specific filtering."
+            "STEP 4: Fetch raw assessment records for a student.\n\n"
+            "Each record represents an individual assessment entry "
+            "(CA, test, exam, quiz, etc).\n\n"
+            "**Frontend flow:**\n"
+            "1. Load this when displaying subject score breakdowns.\n"
+            "2. Use to render tables, charts, and progress analytics.\n"
+            "3. Optionally filter by subject.\n\n"
+            "**Notes:**\n"
+            "- Scores are raw values.\n"
+            "- Percentages are computed server-side."
         ),
         parameters=[
             OpenApiParameter(
                 name="student_id",
-                description="Unique student ID",
+                description="Public student identifier",
                 required=True,
                 location=OpenApiParameter.PATH,
             ),
             OpenApiParameter(
                 name="subject_id",
-                description="Optional subject ID for filtering results",
+                description="Optional subject filter",
                 required=False,
                 location=OpenApiParameter.QUERY,
             ),
         ],
-        responses={200: StudentAssessmentSerializer(many=True)},
+        responses={200: AssessmentEntrySerializer(many=True)},
         tags=["Teacher Dashboard"],
     ),
-    student_contacts=extend_schema(
-        summary="Get student guardian/contacts",
+
+    # =====================================================
+    # STEP 5 — Computed Subject Results
+    # =====================================================
+    student_subject_results=extend_schema(
+        summary="Retrieve computed subject results",
         description=(
-            "Returns guardian and emergency contact details.\n\n"
-            "**Frontend usage:**\n"
-            "Use this endpoint to render guardian contact cards and emergency call actions."
+            "STEP 5: Fetch fully computed subject results for a student.\n\n"
+            "This endpoint returns aggregated academic results including:\n"
+            "- Continuous assessment totals\n"
+            "- Exam scores\n"
+            "- Final grade and remarks\n\n"
+            "**Frontend flow:**\n"
+            "1. Call after loading raw assessments.\n"
+            "2. Display final grades per subject.\n"
+            "3. Use for report cards and academic summaries.\n\n"
+            "**Important:**\n"
+            "This data is computed and validated by backend services."
         ),
         parameters=[
             OpenApiParameter(
                 name="student_id",
-                description="Unique student ID",
+                description="Public student identifier",
+                required=True,
+                location=OpenApiParameter.PATH,
+            ),
+        ],
+        responses={200: SubjectResultSerializer(many=True)},
+        tags=["Teacher Dashboard"],
+    ),
+
+    # =====================================================
+    # STEP 6 — Subject + Assessment Composite View
+    # =====================================================
+    student_subject_breakdown=extend_schema(
+        summary="Retrieve subject-wise assessment breakdown",
+        description=(
+            "STEP 6: Fetch subject-centric academic breakdown.\n\n"
+            "This endpoint combines:\n"
+            "- Subject information\n"
+            "- Individual assessment entries\n"
+            "- Final computed subject result\n\n"
+            "**Frontend flow:**\n"
+            "1. Use for detailed subject drill-down pages.\n"
+            "2. Ideal for accordion or tab-based subject views.\n"
+            "3. Prevents multiple API calls per subject."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="student_id",
+                description="Public student identifier",
+                required=True,
+                location=OpenApiParameter.PATH,
+            ),
+        ],
+        responses={200: StudentSubjectResultSerializer(many=True)},
+        tags=["Teacher Dashboard"],
+    ),
+
+    # =====================================================
+    # STEP 7 — Guardian / Emergency Contacts
+    # =====================================================
+    student_contacts=extend_schema(
+        summary="Retrieve student guardian and contact details",
+        description=(
+            "STEP 7: Fetch guardian and emergency contact information.\n\n"
+            "Returns all registered contacts ordered by priority.\n\n"
+            "**Frontend flow:**\n"
+            "1. Display guardian cards on student profile.\n"
+            "2. Enable call, email, or emergency actions.\n"
+            "3. Highlight primary guardian."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="student_id",
+                description="Public student identifier",
                 required=True,
                 location=OpenApiParameter.PATH,
             ),
         ],
         responses={200: StudentContactSerializer(many=True)},
+        tags=["Teacher Dashboard"],
+    ),
+
+    # =====================================================
+    # STEP 8 — Result Snapshots / Reports
+    # =====================================================
+    result_snapshots=extend_schema(
+        summary="Retrieve generated result snapshots",
+        description=(
+            "STEP 8: Fetch frozen academic reports for a student.\n\n"
+            "Represents generated PDFs or exports for specific terms.\n\n"
+            "**Frontend flow:**\n"
+            "1. Display downloadable report history.\n"
+            "2. Allow viewing or downloading PDF reports.\n"
+            "3. Prevent regeneration conflicts."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="student_id",
+                description="Public student identifier",
+                required=True,
+                location=OpenApiParameter.PATH,
+            ),
+        ],
+        responses={200: ResultSnapshotSerializer(many=True)},
         tags=["Teacher Dashboard"],
     ),
 )
