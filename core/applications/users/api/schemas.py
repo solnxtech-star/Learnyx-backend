@@ -1,26 +1,53 @@
-from core.applications.users.api.serializers.admin_accessment_serializers import AssessmentPolicySerializer, DefaultAssessmentPolicySerializer
+from core.applications.users.api.serializers.admin_serializers import ClassRoomCreateSerializer, ClassRoomSerializer
+from drf_spectacular.utils import OpenApiExample
 from drf_spectacular.utils import OpenApiParameter
 from drf_spectacular.utils import OpenApiResponse
 from drf_spectacular.utils import OpenApiTypes
 from drf_spectacular.utils import extend_schema
-from drf_spectacular.utils import extend_schema_view, OpenApiExample
-
+from drf_spectacular.utils import extend_schema_view
 from rest_framework import serializers
+
 from core.applications.users.api.serializers import serializers as user_serializers
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicSessionSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicTermSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     AdminAssignClassroomsSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     AdminAssignSubjectsSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     SubjectSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherCreateTeachingAssignmentsSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherDetailSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherListSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherReassignTeachingAssignmentSerializer,
+)
+from core.applications.users.api.serializers.admin_accessment_serializers import (
+    AssessmentPolicySerializer,
+)
+from core.applications.users.api.serializers.admin_accessment_serializers import (
+    DefaultAssessmentPolicySerializer,
 )
 from core.applications.users.api.serializers.admin_grading_serializers import (
     DefaultGradingSystemSerializer,
+)
+from core.applications.users.api.serializers.admin_grading_serializers import (
     GradeScaleBulkCreateSerializer,
+)
+from core.applications.users.api.serializers.admin_grading_serializers import (
     GradeScaleSerializer,
 )
 from core.helper.enums import AdmissionStatus
@@ -295,8 +322,8 @@ ORDER_PARAM = OpenApiParameter(
 
 
 def LIST_SCHEMA():
-    return dict(
-        parameters=[
+    return {
+        "parameters": [
             TYPE_PARAM,
             SEARCH_PARAM,
             STATUS_PARAM,
@@ -304,58 +331,99 @@ def LIST_SCHEMA():
             DEPARTMENT_PARAM,
             ORDER_PARAM,
         ],
-        summary="List Profiles",
-        description=(
-            "List all profiles for the selected type.\n\n"
+        "summary": "List User Profiles",
+        "description": (
+            "Returns a paginated list of user profiles belonging to the authenticated "
+            "admin’s school.\n\n"
+
             "REQUIRED QUERY PARAM:\n"
-            "  ?type=student | teacher | admin\n\n"
-            "Optional filters:\n"
-            "  • ?search=john\n"
-            "  • ?status=PENDING\n"
-            "  • ?current_class=SS1 (only for students)\n"
-            "  • ?department=science (only for teachers)\n"
-            "  • ?ordering=user__name\n\n"
-            "Examples:\n"
+            "  • ?type=student | teacher | admin\n\n"
+
+            "FILTERS (optional):\n"
+            "  • ?search=<name or email> — case-insensitive\n"
+            "  • ?status=PENDING | APPROVED | REJECTED\n"
+            "  • ?current_class=<class> — students only\n"
+            "  • ?department=<text> — teachers only\n"
+            "  • ?ordering=<field> or -<field>\n\n"
+
+            "RESPONSE STRUCTURE:\n"
+            "  • type=student → StudentProfileListSerializer\n"
+            "  • type=teacher → TeacherProfileListSerializer\n"
+            "  • type=admin   → AdminProfileListSerializer\n\n"
+
+            "NOTES:\n"
+            "  • Results are scoped to the admin’s school (multi-tenant safe).\n"
+            "  • Invalid filters return 400.\n\n"
+
+            "EXAMPLES:\n"
             "  GET /api/admin/users/?type=student\n"
             "  GET /api/admin/users/?type=teacher&search=ada\n"
             "  GET /api/admin/users/?type=student&status=PENDING&ordering=-admission_date"
         ),
-    )
+    }
 
 
 def RETRIEVE_SCHEMA():
-    return dict(
-        parameters=[TYPE_PARAM],
-        summary="Retrieve a Profile",
-        description=(
-            "Retrieve a single profile by ID.\n\n"
+    return {
+        "parameters": [TYPE_PARAM],
+        "summary": "Retrieve a User Profile",
+        "description": (
+            "Retrieve a single user profile by ID.\n\n"
+
             "REQUIRED QUERY PARAM:\n"
-            "  ?type=student | teacher | admin\n\n"
-            "Examples:\n"
+            "  • ?type=student | teacher | admin\n\n"
+
+            "RESPONSE STRUCTURE:\n"
+            "  • Matches the serializer used in list views for the selected type.\n\n"
+
+            "NOTES:\n"
+            "  • Profile must belong to the admin’s school.\n"
+            "  • Cross-school access returns 404.\n\n"
+
+            "EXAMPLES:\n"
             "  GET /api/admin/users/12/?type=student\n"
             "  GET /api/admin/users/7/?type=teacher"
         ),
-    )
+    }
+
 
 
 def ACTIVATE_SCHEMA():
-    return dict(
-        parameters=[TYPE_PARAM],
-        summary="Activate or Reject a Profile",
-        description=(
-            "Approve or reject a profile.\n\n"
+    return {
+        "parameters": [TYPE_PARAM],
+        "summary": "Approve or Reject a User Profile",
+        "description": (
+            "Approve or reject a user profile within the admin’s school.\n\n"
+
             "REQUIRED QUERY PARAM:\n"
-            "  ?type=student | teacher | admin\n\n"
-            "POST BODY EXAMPLE:\n"
+            "  • ?type=student | teacher | admin\n\n"
+
+            "REQUEST BODY:\n"
             "{\n"
-            '  "action": "approve",  // or reject\n'
-            '  "reason": "Documents verified"\n'
+            '  \"action\": \"approve\" | \"reject\",\n'
+            '  \"reason\": \"Optional explanation\"\n'
             "}\n\n"
-            "Examples:\n"
+
+            "BEHAVIOR:\n"
+            "  • Updates profile status to APPROVED or REJECTED.\n"
+            "  • Automatically sets approved_by using the acting admin.\n"
+            "  • Sends a notification email (best-effort).\n"
+            "  • Re-approving an already approved profile is blocked.\n\n"
+
+            "RESPONSE:\n"
+            "{\n"
+            "  \"detail\": \"Profile for user@email.com has been approved successfully.\"\n"
+            "}\n\n"
+
+            "NOTES:\n"
+            "  • Email failure does not rollback the operation.\n"
+            "  • Action is audited via service-layer logic.\n\n"
+
+            "EXAMPLES:\n"
             "  POST /api/admin/users/12/activate/?type=student\n"
             "  POST /api/admin/users/8/activate/?type=teacher"
         ),
-    )
+    }
 
 
 classroom_create_schema = extend_schema(
@@ -403,9 +471,10 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
         - Results are scoped to the user's school.
         - By default this returns all sessions; frontends may filter to `is_active=true`.
         """,
-        tags=["Academics"],
+        tags=["Admin Management"],
         responses={200: AcademicSessionSerializer(many=True), 401: NOT_FOUND_RESP},
     ),
+
     create=extend_schema(
         summary="Create Academic Session",
         description="""
@@ -415,9 +484,6 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
         - Name must follow `YYYY/YYYY` or `YYYY-YYYY`.
         - If `is_active=true`, all other sessions in the same school are automatically deactivated.
 
-        Validation notes:
-        - Serializer will return 400 when name format is invalid or school context is missing.
-
         Example request body:
         ```json
         {
@@ -426,7 +492,7 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
         }
         ```
         """,
-        tags=["Academics"],
+        tags=["Admin Management"],
         request=AcademicSessionSerializer,
         responses={
             201: AcademicSessionSerializer,
@@ -434,21 +500,24 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
             401: UNAUTHORIZED_RESP,
         },
     ),
+
     retrieve=extend_schema(
         summary="Retrieve Academic Session",
         description="Fetch a single academic session by ID.",
-        tags=["Academics"],
+        tags=["Admin Management"],
         responses={200: AcademicSessionSerializer, 404: NOT_FOUND_RESP},
     ),
+
     update=extend_schema(
         summary="Update Academic Session",
         description="""
-        Fully update an existing session.
+        Fully update an existing academic session.
 
         Notes:
-        - Activation rules apply on update (activating will deactivate other sessions).
+        - Activation rules apply on update.
+        - Setting `is_active=true` will automatically deactivate other sessions.
         """,
-        tags=["Academics"],
+        tags=["Admin Management"],
         request=AcademicSessionSerializer,
         responses={
             200: AcademicSessionSerializer,
@@ -456,17 +525,64 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
             404: NOT_FOUND_RESP,
         },
     ),
+
     partial_update=extend_schema(
-        summary="Partially update Academic Session",
-        tags=["Academics"],
+        summary="Partially Update Academic Session",
+        tags=["Admin Management"],
         request=AcademicSessionSerializer,
         responses={200: AcademicSessionSerializer, 400: BAD_REQUEST_RESP},
     ),
+
     destroy=extend_schema(
         summary="Deactivate Academic Session",
-        description="Soft-delete: sets `is_active=false`. Record remains in DB.",
-        tags=["Academics"],
+        description="""
+        Soft-delete an academic session.
+
+        Notes:
+        - Sets `is_active=false`
+        - Record remains in the database for audit/history purposes.
+        """,
+        tags=["Admin Management"],
         responses={204: OpenApiResponse(description="No Content")},
+    ),
+
+    open_session=extend_schema(
+        summary="Open Academic Session",
+        description="""
+        Opens an academic session.
+
+        Business rules:
+        - Sets `is_active=true` on the selected session.
+        - Automatically closes all other sessions belonging to the same school.
+        - This endpoint performs a state transition and does not accept a request body.
+        """,
+        tags=["Admin Management"],
+        responses={
+            200: OpenApiResponse(
+                description="Academic session opened successfully."
+            ),
+            404: NOT_FOUND_RESP,
+        },
+    ),
+
+    close_session=extend_schema(
+        summary="Close Academic Session",
+        description="""
+        Closes an academic session.
+
+        Business rules:
+        - Sets `is_active=false` on the selected session.
+        - Does not automatically open another session.
+        - This endpoint performs a state transition and does not accept a request body.
+        """,
+        tags=["Admin Management"],
+        responses={
+            200: OpenApiResponse(
+                description="Academic session closed successfully."
+            ),
+            400: BAD_REQUEST_RESP,
+            404: NOT_FOUND_RESP,
+        },
     ),
 )
 
@@ -478,21 +594,22 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
     list=extend_schema(
         summary="List Academic Terms",
         description="""
-        Returns terms for the authenticated user's school.
+        Returns academic terms for the authenticated user's school.
 
         Query params:
-        - `session_id` (optional): filter terms belonging to a specific session.
+        - `session_id` (optional): Filter terms belonging to a specific session.
         """,
         parameters=[
             OpenApiParameter("session_id", str, description="Academic Session ID")
         ],
-        tags=["Academics"],
+        tags=["Admin Management"],
         responses={200: AcademicTermSerializer(many=True)},
     ),
+
     create=extend_schema(
         summary="Create Academic Term",
         description="""
-        Creates a new term under a session.
+        Creates a new academic term under a session.
 
         Business rules:
         - Allowed term names: "First Term", "Second Term", "Third Term".
@@ -509,7 +626,7 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         }
         ```
         """,
-        tags=["Academics"],
+        tags=["Admin Management"],
         request=AcademicTermSerializer,
         responses={
             201: AcademicTermSerializer,
@@ -517,29 +634,80 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
             404: NOT_FOUND_RESP,
         },
     ),
+
     retrieve=extend_schema(
         summary="Retrieve Academic Term",
-        tags=["Academics"],
+        tags=["Admin Management"],
         responses={200: AcademicTermSerializer, 404: NOT_FOUND_RESP},
     ),
+
     update=extend_schema(
         summary="Update Academic Term",
-        description="Updates a term. Activation rules enforced by serializer.",
-        tags=["Academics"],
+        description="Updates an academic term. Activation rules are enforced by the serializer.",
+        tags=["Admin Management"],
         request=AcademicTermSerializer,
         responses={200: AcademicTermSerializer, 400: BAD_REQUEST_RESP},
     ),
+
     partial_update=extend_schema(
-        summary="Partially update Academic Term",
-        tags=["Academics"],
+        summary="Partially Update Academic Term",
+        tags=["Admin Management"],
         request=AcademicTermSerializer,
         responses={200: AcademicTermSerializer, 400: BAD_REQUEST_RESP},
     ),
+
     destroy=extend_schema(
         summary="Deactivate Academic Term",
-        description="Soft-delete by setting `is_active=false`.",
-        tags=["Academics"],
+        description="Soft delete. Marks the term as inactive (`is_active=false`).",
+        tags=["Admin Management"],
         responses={204: OpenApiResponse(description="No Content")},
+    ),
+
+    # ==========================
+    # SCORE ENTRY CONTROL
+    # ==========================
+
+    open_score_entry=extend_schema(
+        summary="Open Term for Score Entry",
+        description="""
+        Opens an academic term for score entry.
+
+        Business rules:
+        - Only one term per academic session can be open for score entry at a time.
+        - The parent academic session must be active.
+        - Opening a term automatically closes any other active term in the same session.
+
+        This endpoint performs a **state transition** and does not accept a request body.
+        """,
+        tags=["Admin Management"],
+        responses={
+            200: OpenApiResponse(
+                description="Term successfully opened for score entry."
+            ),
+            400: BAD_REQUEST_RESP,
+            404: NOT_FOUND_RESP,
+        },
+    ),
+
+    close_score_entry=extend_schema(
+        summary="Close Term for Score Entry",
+        description="""
+        Closes an academic term for score entry.
+
+        Business rules:
+        - Only active terms can be closed.
+        - Closing a term prevents further score submissions.
+
+        This endpoint performs a **state transition** and does not accept a request body.
+        """,
+        tags=["Admin Management"],
+        responses={
+            200: OpenApiResponse(
+                description="Term successfully closed for score entry."
+            ),
+            400: BAD_REQUEST_RESP,
+            404: NOT_FOUND_RESP,
+        },
     ),
 )
 
@@ -551,63 +719,305 @@ SUBJECT_SCHEMA = extend_schema_view(
     list=extend_schema(
         summary="List Subjects",
         description="""
-        Returns subjects for the authenticated user's school.
+        Returns all subjects belonging to the authenticated user's school.
 
-        Supports search via `?search=<name>`.
+        Features:
+        - Results are scoped to the user's school (multi-tenant safe).
+        - Supports case-insensitive search by subject name using `?search=<name>`.
+        - Includes curriculum attributes such as mandatory status and credit hours.
         """,
         parameters=[
-            OpenApiParameter("search", str, description="Search by subject name")
+            OpenApiParameter(
+                name="search",
+                type=str,
+                description="Filter subjects by name (case-insensitive).",
+                required=False,
+            )
         ],
-        tags=["Academics"],
+        tags=["Admin Management"],
         responses={200: SubjectSerializer(many=True)},
     ),
+
     create=extend_schema(
         summary="Create Subject",
         description="""
-        Creates a subject. Optionally link to classrooms by their IDs.
+        Creates a new subject for the authenticated user's school.
 
-        Request example:
+        Curriculum Attributes:
+        - `is_mandatory` indicates whether the subject is compulsory for students
+          in the assigned classrooms.
+        - `credit_hour` defines the academic weight of the subject and is used
+          for GPA and weighted calculations.
+
+        Classroom Assignment:
+        - `class_rooms` accepts a list of classroom UUIDs.
+        - Multiple classrooms may be linked to a subject.
+        - All provided classrooms must belong to the same school as the user.
+
+        Example Request:
         ```json
         {
           "name": "Mathematics",
           "code": "MTH101",
-          "description": "Basic math",
-          "class_rooms": ["<classroom_uuid_1>", "<classroom_uuid_2>"],
+          "description": "Basic mathematics",
+          "is_mandatory": true,
+          "credit_hour": 3,
+          "class_rooms": [
+            "<classroom_uuid_1>",
+            "<classroom_uuid_2>"
+          ],
           "is_active": true
         }
         ```
-        Validation:
-        - All class_rooms must belong to the same school (validated by serializer).
+
+        Notes:
+        - The `school` field is automatically inferred from the authenticated user.
+        - `credit_hour` defaults to 1 if not provided.
+        - Invalid or cross-school classroom IDs will result in a validation error.
         """,
-        tags=["Academics"],
+        tags=["Admin Management"],
         request=SubjectSerializer,
-        responses={201: SubjectSerializer, 400: BAD_REQUEST_RESP},
+        responses={
+            201: SubjectSerializer,
+            400: BAD_REQUEST_RESP,
+        },
     ),
+
     retrieve=extend_schema(
         summary="Retrieve Subject",
-        tags=["Academics"],
-        responses={200: SubjectSerializer, 404: NOT_FOUND_RESP},
+        description="""
+        Retrieves a single subject by ID.
+
+        Includes:
+        - Mandatory status
+        - Credit hour value
+        - Assigned classrooms
+
+        Notes:
+        - Subject must belong to the authenticated user's school.
+        """,
+        tags=["Admin Management"],
+        responses={
+            200: SubjectSerializer,
+            404: NOT_FOUND_RESP,
+        },
     ),
+
     update=extend_schema(
         summary="Update Subject",
-        description="Updates subject and its classroom mappings.",
-        tags=["Academics"],
+        description="""
+        Fully updates a subject and its classroom associations.
+
+        Behavior:
+        - If `class_rooms` is provided, existing classroom mappings
+          are replaced with the new list.
+        - If omitted, classroom mappings remain unchanged.
+
+        Curriculum Updates:
+        - `is_mandatory` may be toggled.
+        - `credit_hour` may be updated to reflect curriculum changes.
+
+        Notes:
+        - All provided classrooms must belong to the user's school.
+        - Uniqueness of subject name and code is enforced per school.
+        """,
+        tags=["Admin Management"],
         request=SubjectSerializer,
-        responses={200: SubjectSerializer, 400: BAD_REQUEST_RESP},
+        responses={
+            200: SubjectSerializer,
+            400: BAD_REQUEST_RESP,
+        },
     ),
+
     partial_update=extend_schema(
-        summary="Partially update Subject",
-        tags=["Academics"],
+        summary="Partially Update Subject",
+        description="""
+        Partially updates subject fields.
+
+        Classroom Update Rules:
+        - Providing `class_rooms` updates classroom mappings.
+        - Providing an empty list clears all classroom associations.
+        - Omitting `class_rooms` leaves existing associations untouched.
+
+        Curriculum Fields:
+        - `is_mandatory` and `credit_hour` may be updated independently.
+        """,
+        tags=["Admin Management"],
         request=SubjectSerializer,
-        responses={200: SubjectSerializer, 400: BAD_REQUEST_RESP},
+        responses={
+            200: SubjectSerializer,
+            400: BAD_REQUEST_RESP,
+        },
     ),
+
     destroy=extend_schema(
         summary="Deactivate Subject",
-        description="Soft-delete via `is_active=false`.",
-        tags=["Academics"],
-        responses={204: OpenApiResponse(description="No Content")},
+        description="""
+        Soft-deletes a subject by setting `is_active` to `false`.
+
+        Notes:
+        - No data is permanently removed.
+        - Deactivated subjects no longer participate in curriculum,
+          grading, or GPA calculations.
+        """,
+        tags=["Admin Management"],
+        responses={
+            204: OpenApiResponse(description="No Content"),
+        },
     ),
 )
+
+CLASSROOM_SCHEMA = extend_schema_view(
+    list=extend_schema(
+        summary="List Classrooms",
+        description="""
+        Returns all classrooms belonging to the authenticated admin's school.
+
+        Access Control:
+        - Only School Owners and Principals can access this endpoint.
+
+        Scope:
+        - Results are strictly scoped to the authenticated user's school
+          (multi-tenant isolation).
+
+        Returned Fields:
+        - `academic_class` (raw value)
+        - `class_display` (human-readable academic class)
+        - `arm`
+        - `track` (raw value)
+        - `track_display` (human-readable track)
+        - `created_at`
+        - `updated_at`
+
+        Filtering:
+        - `?academic_class=<value>`
+        - `?track=<SCIENCE | ARTS | COMMERCIAL>`
+
+        Search:
+        - `?search=<academic_class | arm | track>`
+
+        Ordering:
+        - `?ordering=academic_class`
+        - `?ordering=track`
+        - `?ordering=arm`
+        - `?ordering=created`
+
+        Default Ordering:
+        - academic_class → track → arm
+        """,
+        tags=["Admin Management"],
+        responses={200: ClassRoomSerializer(many=True)},
+    ),
+
+    retrieve=extend_schema(
+        summary="Retrieve Classroom",
+        description="""
+        Retrieves a single classroom by ID.
+
+        Notes:
+        - The classroom must belong to the authenticated user's school.
+        - Includes both raw and display values for class and track.
+        """,
+        tags=["Admin Management"],
+        responses={200: ClassRoomSerializer},
+    ),
+
+    create=extend_schema(
+        summary="Create Classroom",
+        description="""
+        Creates a new classroom under the authenticated user's school.
+
+        Behavior:
+        - `school` is automatically inferred from the authenticated user.
+        - `academic_class`, `arm`, and `track` are required.
+        - Academic track must be explicitly selected.
+
+        Uniqueness Constraint:
+        - A classroom must be unique per school by the combination:
+          (`academic_class`, `arm`, `track`)
+
+        Validation Rules:
+        - Duplicate classrooms within the same school are rejected.
+        - Users without an associated school cannot create classrooms.
+
+        Accepted Academic Tracks:
+        - `SCIENCE`
+        - `ARTS`
+        - `COMMERCIAL`
+
+        Example Request:
+        ```json
+        {
+          "academic_class": "SS2",
+          "arm": "A",
+          "track": "SCIENCE"
+        }
+        ```
+
+        Example Result:
+        - SS2 A (Science)
+        """,
+        tags=["Admin Management"],
+        request=ClassRoomCreateSerializer,
+        responses={
+            201: ClassRoomSerializer,
+            400: BAD_REQUEST_RESP,
+        },
+    ),
+
+    update=extend_schema(
+        summary="Update Classroom",
+        description="""
+        Fully updates a classroom.
+
+        Notes:
+        - The classroom must belong to the authenticated user's school.
+        - All required fields must be provided.
+        - Uniqueness constraints are re-validated during update.
+        """,
+        tags=["Admin Management"],
+        request=ClassRoomCreateSerializer,
+        responses={
+            200: ClassRoomSerializer,
+            400: BAD_REQUEST_RESP,
+        },
+    ),
+
+    partial_update=extend_schema(
+        summary="Partially Update Classroom",
+        description="""
+        Partially updates a classroom.
+
+        Notes:
+        - Only provided fields are updated.
+        - School ownership and uniqueness constraints are enforced.
+        - Useful for updating classroom arm or track independently.
+        """,
+        tags=["Admin Management"],
+        request=ClassRoomCreateSerializer,
+        responses={
+            200: ClassRoomSerializer,
+            400: BAD_REQUEST_RESP,
+        },
+    ),
+
+    destroy=extend_schema(
+        summary="Delete Classroom",
+        description="""
+        Permanently deletes a classroom.
+
+        Warning:
+        - This action is irreversible.
+        - Ensure the classroom is not referenced by students, subjects,
+          or academic records before deletion.
+        """,
+        tags=["Admin Management"],
+        responses={
+            204: OpenApiResponse(description="No Content"),
+        },
+    ),
+)
+
 
 TeacherViewSetSchema = extend_schema_view(
     # ============================================================

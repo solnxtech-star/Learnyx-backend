@@ -1,3 +1,4 @@
+from django.db import IntegrityError
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
@@ -81,6 +82,38 @@ class AcademicSessionSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
+class OpenAcademicSessionSerializer(serializers.Serializer):
+    """
+    Explicit serializer for opening an academic session.
+    """
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        # Close all other sessions for the school
+        AcademicSession.objects.filter(
+            school=instance.school,
+        ).exclude(id=instance.id).update(is_active=False)
+
+        instance.is_active = True
+        instance.save(update_fields=["is_active"])
+        return instance
+
+
+class CloseAcademicSessionSerializer(serializers.Serializer):
+    """
+    Explicit serializer for closing an academic session.
+    """
+
+    def update(self, instance, validated_data):
+        if not instance.is_active:
+            raise serializers.ValidationError(
+                _("Session is already closed.")
+            )
+
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])
+        return instance
+
 # ============================================================================
 # Academic Term Serializer
 # ============================================================================
@@ -135,7 +168,7 @@ class AcademicTermSerializer(serializers.ModelSerializer):
         # Enforce standard term names
         if name and name not in self.STANDARD_TERMS:
             raise serializers.ValidationError(
-                _(f"Allowed terms are: {', '.join(self.STANDARD_TERMS)}"),
+                _("Allowed terms are: %s") % (', '.join(self.STANDARD_TERMS),),
             )
 
         # Prevent duplicates
@@ -145,7 +178,7 @@ class AcademicTermSerializer(serializers.ModelSerializer):
                 qs = qs.exclude(id=self.instance.id)
             if qs.exists():
                 raise serializers.ValidationError(
-                    _(f"'{name}' already exists in this session."),
+                    _("'%s' already exists in this session.") % name,
                 )
 
         return data
@@ -235,10 +268,26 @@ class AcademicStructureSetupSerializer(serializers.Serializer):
 
 class SubjectSerializer(serializers.ModelSerializer):
     """
-    Handles Subject management safely in multi-tenant systems.
+    Handles Subject creation and updates safely in a multi-tenant system.
+
+    Responsibilities:
+    - Automatically assigns school from the authenticated user.
+    - Normalizes subject name and code.
+    - Enforces school-level ownership for classrooms.
+    - Prevents duplicate subject names and codes per school.
+    - Respects soft-deletes (`is_active=True` only).
+    - Supports mandatory subjects and credit hours.
     """
 
     school_name = serializers.CharField(source="school.name", read_only=True)
+
+    is_mandatory = serializers.BooleanField(required=False)
+
+    credit_hour = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        help_text=_("Academic weight of the subject."),
+    )
 
     class_rooms = serializers.PrimaryKeyRelatedField(
         many=True,
@@ -255,47 +304,158 @@ class SubjectSerializer(serializers.ModelSerializer):
             "name",
             "code",
             "description",
+            "is_mandatory",
+            "credit_hour",
             "class_rooms",
             "is_active",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "school"]
+        read_only_fields = [
+            "id",
+            "school",
+            "created_at",
+            "updated_at",
+        ]
 
+    # --------------------------------------------------
+    # Helpers
+    # --------------------------------------------------
     def _get_school(self):
         request = self.context.get("request")
-        if not request or not hasattr(request.user, "school"):
+        if not request or not getattr(request.user, "school", None):
             raise serializers.ValidationError(_("School context missing."))
         return request.user.school
 
-    def validate_class_rooms(self, value):
+    # --------------------------------------------------
+    # Field-level validation
+    # --------------------------------------------------
+    def validate_name(self, value):
         school = self._get_school()
-        for classroom in value:
-            if classroom.school != school:
-                raise serializers.ValidationError(
-                    _(f"'{classroom.name}' does not belong to your school."),
-                )
+        normalized_name = value.strip().title()
+
+        if len(normalized_name) < 3:
+            raise serializers.ValidationError(_("Subject name is too short."))
+
+        queryset = Subject.objects.filter(
+            school=school,
+            name__iexact=normalized_name,
+            is_active=True,
+        )
+
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError(
+                _("A subject with this name already exists in your school.")
+            )
+
+        return normalized_name
+
+    def validate_code(self, value):
+        school = self._get_school()
+        normalized_code = value.strip().upper()
+
+        if len(normalized_code) < 3:
+            raise serializers.ValidationError(_("Subject code is too short."))
+
+        queryset = Subject.objects.filter(
+            school=school,
+            code=normalized_code,
+            is_active=True,
+        )
+
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError(
+                _("A subject with this code already exists in your school.")
+            )
+
+        return normalized_code
+
+    def validate_credit_hour(self, value):
+        if value < 1:
+            raise serializers.ValidationError(
+                _("Credit hour must be at least 1.")
+            )
         return value
 
+    def validate_class_rooms(self, value):
+        school = self._get_school()
+
+        for classroom in value:
+            if classroom.school_id != school.id:
+                raise serializers.ValidationError(
+                    _("'%s' does not belong to your school.") % classroom,
+                )
+
+        return value
+
+    # --------------------------------------------------
+    # Object-level validation
+    # --------------------------------------------------
+    def validate(self, attrs):
+        school = self._get_school()
+
+        name = attrs.get("name", getattr(self.instance, "name", None))
+        code = attrs.get("code", getattr(self.instance, "code", None))
+
+        if not name or not code:
+            return attrs
+
+        queryset = Subject.objects.filter(
+            school=school,
+            name__iexact=name,
+            code=code,
+            is_active=True,
+        )
+
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError(
+                _("A subject with this name and code already exists in your school.")
+            )
+
+        return attrs
+
+    # --------------------------------------------------
+    # Create / Update
+    # --------------------------------------------------
     def create(self, validated_data):
         class_rooms = validated_data.pop("class_rooms", [])
         validated_data["school"] = self._get_school()
 
-        subject = super().create(validated_data)
-        subject.class_rooms.set(class_rooms)
+        try:
+            subject = super().create(validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError(
+                _("A subject with this name or code already exists in your school."),
+            ) from None
+
+        if class_rooms:
+            subject.class_rooms.set(class_rooms)
+
         return subject
 
     def update(self, instance, validated_data):
         class_rooms = validated_data.pop("class_rooms", None)
 
-        subject = super().update(instance, validated_data)
+        try:
+            subject = super().update(instance, validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError(
+                _("A subject with this name or code already exists in your school."),
+            ) from None
 
         if class_rooms is not None:
             subject.class_rooms.set(class_rooms)
 
         return subject
-
-
 # ============================================================================
 
 
