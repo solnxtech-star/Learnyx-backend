@@ -18,20 +18,27 @@ from rest_framework.viewsets import ModelViewSet
 from core.applications.academics.models import ClassRoom
 from core.applications.grading.models import GradeScale
 from core.applications.users.api import schemas as user_schemas
-from core.applications.users.api.schemas import (
-    GRADE_SCALE_ACTION_SCHEMAS,
-    GRADING_SCHEMA,
-    classroom_create_schema,
-)
+from core.applications.users.api.schemas import CLASSROOM_SCHEMA
+from core.applications.users.api.schemas import GRADE_SCALE_ACTION_SCHEMAS
+from core.applications.users.api.schemas import GRADING_SCHEMA
+from core.applications.users.api.schemas import classroom_create_schema
 from core.applications.users.api.schemas import classroom_update_schema
 from core.applications.users.api.serializers.admin_grading_serializers import (
     DefaultGradingSystemSerializer,
+)
+from core.applications.users.api.serializers.admin_grading_serializers import (
     GradeScaleBulkCreateSerializer,
+)
+from core.applications.users.api.serializers.admin_grading_serializers import (
     GradeScaleSerializer,
 )
 from core.applications.users.api.serializers.admin_serializers import (
     AdminProfileListSerializer,
+)
+from core.applications.users.api.serializers.admin_serializers import (
     ClassRoomCreateSerializer,
+)
+from core.applications.users.api.serializers.admin_serializers import (
     ClassRoomSerializer,
 )
 from core.applications.users.api.serializers.admin_serializers import (
@@ -202,50 +209,55 @@ class AdminUsersViewset(ModelViewSet):
     def activate(self, request, pk=None):
         """Approve or reject a user profile."""
         data = request.data.copy()
-        # NO LONGER setting data["id"] = pk
         data.setdefault("type", request.query_params.get("type"))
 
         serializer = UserActivationSerializer(
             data=data,
             context={
                 "request": request,
-                "profile_id": pk,  # Pass profile_id in context
+                "profile_id": pk,
             },
         )
         serializer.is_valid(raise_exception=True)
         instance = serializer.save()
 
-        # Enhanced response message
-        action = data.get("action")
-        if action == "approve":
-            message = f"{instance.user.email} has been approved and notified via email."
-        else:
-            message = f"{instance.user.email} has been rejected and notified via email."
-
         return Response(
-            {"detail": message},
+            {
+                "detail": (
+                    f"Profile for {instance.user.email} has been "
+                    f"{instance.status.lower()} successfully."
+                ),
+            },
             status=status.HTTP_200_OK,
         )
 
 
-@extend_schema(tags=["Admin User"])
+@CLASSROOM_SCHEMA
 class ClassRoomViewSet(ModelViewSet):
     """
-    CRUD for ClassRooms (JSS1 A, SS2 B, etc.)
-    Only School Owners and Principals can manage classrooms.
+    CRUD operations for ClassRooms (e.g., JSS1 A, SS2 B – Science, Arts, Commercial).
+
+    Access:
+    - Only School Owners and Principals can manage classrooms.
+
+    Notes:
+    - All operations are scoped to the authenticated admin's school.
+    - Supports filtering, searching, and ordering by academic class and track.
     """
 
     permission_classes = [IsAuthenticated, IsPrincipalOrSchoolOwner]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
 
-    filterset_fields = ["academic_class"]
-    search_fields = ["arm", "academic_class"]
-    ordering_fields = ["academic_class", "arm", "created"]
-    ordering = ["academic_class", "arm"]
+    # Filtering & querying
+    filterset_fields = ["academic_class", "track"]
+    search_fields = ["arm", "academic_class", "track"]
+    ordering_fields = ["academic_class", "track", "arm", "created"]
+    ordering = ["academic_class", "track", "arm"]
 
     def get_queryset(self):
         """
-        Restrict classrooms to the authenticated admin's school (multi-tenant isolation).
+        Restrict classrooms to the authenticated admin's school
+        to ensure multi-tenant isolation.
         """
         user = self.request.user
 
@@ -255,17 +267,28 @@ class ClassRoomViewSet(ModelViewSet):
         return ClassRoom.objects.filter(school=user.school)
 
     def get_serializer_class(self):
-        if self.action in ["create", "update", "partial_update"]:
+        """
+        Use a write-optimized serializer for create/update
+        and a read-optimized serializer for list/retrieve.
+        """
+        if self.action in ("create", "update", "partial_update"):
             return ClassRoomCreateSerializer
         return ClassRoomSerializer
 
     @classroom_create_schema
     def create(self, request, *args, **kwargs):
+        """
+        Create a classroom under the authenticated user's school.
+        """
         return super().create(request, *args, **kwargs)
 
     @classroom_update_schema
     def update(self, request, *args, **kwargs):
+        """
+        Update a classroom belonging to the authenticated user's school.
+        """
         return super().update(request, *args, **kwargs)
+
 
 
 @GRADING_SCHEMA

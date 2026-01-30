@@ -51,10 +51,13 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
     - Classroom & student navigation
     - Assessment entry (WRITE)
     - Assessment viewing (READ)
-    - Computed subject results
+    - Computed subject results (READ ONLY)
     """
 
-    permission_classes = [IsAuthenticated, IsSchoolAdminOrAssignedTeacher]
+    permission_classes = [
+        IsAuthenticated,
+        IsSchoolAdminOrAssignedTeacher,
+    ]
 
     # ------------------------------------------------------------------
     # Utilities
@@ -65,6 +68,12 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
             TeacherProfile.objects.select_related("user"),
             user=user,
         )
+
+    def _get_term_from_assessment(self, assessment_type):
+        """
+        Single source of truth for term resolution.
+        """
+        return assessment_type.policy.term
 
     # ------------------------------------------------------------------
     # DASHBOARD NAVIGATION
@@ -84,7 +93,7 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
         )
 
         return Response(
-            TeacherClassroomSerializer(classrooms, many=True).data,
+            TeacherClassroomSerializer(classrooms, many=True).data
         )
 
     @action(
@@ -103,10 +112,8 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
         )
 
         return Response(
-            ClassroomStudentSerializer(students, many=True).data,
+            ClassroomStudentSerializer(students, many=True).data
         )
-
-
 
     @action(
         detail=False,
@@ -121,34 +128,29 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
         )
 
         return Response(
-            StudentProfileDetailSerializer(student).data,
+            StudentProfileDetailSerializer(student).data
         )
 
     # ------------------------------------------------------------------
     # ASSESSMENT ENTRY (WRITE)
     # ------------------------------------------------------------------
 
-    @action(
-        detail=False,
-        methods=["post"],
-        url_path="assessments/enter",
-    )
+    @action(detail=False, methods=["post"], url_path="assessments/enter")
     def enter_assessment(self, request):
-        """
-        Teacher enters or updates a student's assessment score.
-        Triggers subject result recomputation.
-        """
-
-        serializer = AssessmentEntryCreateSerializer(data=request.data)
+        serializer = AssessmentEntryCreateSerializer(
+            data=request.data
+        )
         serializer.is_valid(raise_exception=True)
 
         record = serializer.save()
 
-        # recompute subject result immediately
+        # 🔑 Explicit service call
         compute_subject_result(
             student=record.student,
             classroom_subject=record.classroom_subject,
-            term=record.term,
+            term=self._get_term_from_assessment(
+                record.assessment_type
+            ),
         )
 
         return Response(
@@ -156,6 +158,9 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
             status=status.HTTP_201_CREATED,
         )
 
+    # ------------------------------------------------------------------
+    # ASSESSMENT VIEWING (READ)
+    # ------------------------------------------------------------------
 
     @action(
         detail=False,
@@ -168,13 +173,16 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
         qs = AssessmentRecord.objects.filter(
             student__student_id=student_id,
             student__user__school=request.user.school,
+        ).select_related(
+            "assessment_type",
+            "classroom_subject",
         )
 
         if subject_id:
-            qs = qs.filter(classroom_subject__subject_id=subject_id)
+            qs = qs.filter(classroom_subject_id=subject_id)
 
         return Response(
-            AssessmentEntrySerializer(qs, many=True).data,
+            AssessmentEntrySerializer(qs, many=True).data
         )
 
     # ------------------------------------------------------------------
@@ -184,24 +192,32 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
     @action(
         detail=False,
         methods=["get"],
-        url_path="students/(?P<student_id>[^/.]+)/subjects/(?P<subject_id>[^/.]+)/result",
+        url_path=(
+            "students/(?P<student_id>[^/.]+)/"
+            "subjects/(?P<subject_id>[^/.]+)/result"
+        ),
     )
-    def student_subject_result(self, request, student_id=None, subject_id=None):
+    def student_subject_result(
+        self, request, student_id=None, subject_id=None
+    ):
         """
         PRD: Student → Subject → Final computed result
         """
 
+        term_id = request.query_params.get("term")
+
         result = get_object_or_404(
             SubjectResult.objects.select_related(
-                "classroom_subject__subject",
+                "classroom_subject"
             ),
             student__student_id=student_id,
-            classroom_subject__subject_id=subject_id,
+            classroom_subject_id=subject_id,
+            term_id=term_id,
             student__user__school=request.user.school,
         )
 
         return Response(
-            SubjectResultSerializer(result).data,
+            SubjectResultSerializer(result).data
         )
 
     # ------------------------------------------------------------------
@@ -211,32 +227,44 @@ class TeacherDashboardViewSet(viewsets.ViewSet):
     @action(
         detail=False,
         methods=["get"],
-        url_path="students/(?P<student_id>[^/.]+)/subjects/(?P<subject_id>[^/.]+)",
+        url_path=(
+            "students/(?P<student_id>[^/.]+)/"
+            "subjects/(?P<subject_id>[^/.]+)"
+        ),
     )
-    def student_subject_full(self, request, student_id=None, subject_id=None):
+    def student_subject_full(
+        self, request, student_id=None, subject_id=None
+    ):
         """
         PRD:
         Student → Subject → Assessments + Computed Result
         """
 
-        assessments = AssessmentRecord.objects.filter(
-            student__student_id=student_id,
-            classroom_subject__subject_id=subject_id,
-            student__user__school=request.user.school,
+        term_id = request.query_params.get("term")
+
+        assessments = (
+            AssessmentRecord.objects.filter(
+                student__student_id=student_id,
+                classroom_subject_id=subject_id,
+                student__user__school=request.user.school,
+            )
+            .select_related("assessment_type")
+            .order_by("assessment_type__order", "index")
         )
 
         result = SubjectResult.objects.filter(
             student__student_id=student_id,
-            classroom_subject__subject_id=subject_id,
+            classroom_subject_id=subject_id,
+            term_id=term_id,
         ).first()
 
-        payload = {
-            "subject": result.classroom_subject.subject.name if result else "",
-            "assessments": assessments,
-            "computed_result": result,
-        }
+        serializer = StudentSubjectResultSerializer(
+            {
+                "assessments": assessments,
+                "computed_result": result,
+            }
+        )
 
-        serializer = StudentSubjectResultSerializer(payload)
         return Response(serializer.data)
 
     # ------------------------------------------------------------------

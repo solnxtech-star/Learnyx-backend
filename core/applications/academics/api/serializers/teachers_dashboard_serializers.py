@@ -1,7 +1,10 @@
+from django.db import models
+from django.db import transaction
 from rest_framework import serializers
 
 from core.applications.academics.models import AssessmentRecord
 from core.applications.academics.models import ClassRoom
+from core.applications.academics.models import Subject
 from core.applications.grading.models import SubjectResult
 from core.applications.users.models import StudentContact
 from core.applications.users.models import StudentProfile
@@ -65,41 +68,108 @@ class StudentProfileDetailSerializer(serializers.ModelSerializer):
 
 
 
-
 class AssessmentEntryCreateSerializer(serializers.ModelSerializer):
     """
-    PRD: Teacher enters or updates student assessment scores
-    WRITE serializer only
-    this is not used for reading/displaying scores
+    Teacher input serializer for assessment entry.
+
+    Guarantees:
+    - Subject belongs to student's classroom
+    - Score respects assessment max_score
+    - classroom_subject is stored correctly
+    - index is auto-incremented per student + subject + assessment_type
     """
+
+    subject = serializers.PrimaryKeyRelatedField(
+        queryset=Subject.objects.filter(is_active=True),
+        write_only=True,
+    )
 
     class Meta:
         model = AssessmentRecord
-        fields = [
+        fields = (
             "student",
             "assessment_type",
+            "subject",
             "score",
             "date_taken",
-        ]
+        )
 
     def validate(self, attrs):
-        """
-        Light validation only.
-        Business rules (max_score, ownership, duplicates)
-        live in the Service layer.
-        """
-        if attrs["score"] < 0:
-            msg = "Score cannot be negative."
-            raise serializers.ValidationError(msg)
+        student = attrs["student"]
+        subject = attrs["subject"]
+        assessment_type = attrs["assessment_type"]
+        score = attrs["score"]
+
+        # 1️⃣ Subject must be assigned to student's classroom
+        if not subject.class_rooms.filter(
+            id=student.classroom_id,
+        ).exists():
+            raise serializers.ValidationError(
+                {
+                    "subject": (
+                        "This subject is not assigned "
+                        "to the student's classroom."
+                    ),
+                },
+            )
+
+        # 2️⃣ Score bounds
+        if score < 0:
+            raise serializers.ValidationError(
+                {"score": "Score cannot be negative."},
+            )
+
+        if score > assessment_type.max_score:
+            raise serializers.ValidationError(
+                {
+                    "score": (
+                        f"Score cannot exceed "
+                        f"{assessment_type.max_score}."
+                    ),
+                },
+            )
+
         return attrs
+
+    def create(self, validated_data):
+        subject = validated_data.pop("subject")
+        student = validated_data["student"]
+        assessment_type = validated_data["assessment_type"]
+
+        # 3️⃣ Index auto-increment
+        last_index = (
+            AssessmentRecord.objects.filter(
+                student=student,
+                classroom_subject=subject,
+                assessment_type=assessment_type,
+            )
+            .aggregate(
+                max_index=models.Max("index")
+            )
+            .get("max_index")
+            or 0
+        )
+
+        validated_data["index"] = last_index + 1
+        validated_data["classroom_subject"] = subject
+
+        return AssessmentRecord.objects.create(**validated_data)
 
 
 
 class AssessmentEntrySerializer(serializers.ModelSerializer):
     """
-    results_entries
-    Raw assessment scores per subject.
+    Read-only serializer for assessment records.
     """
+
+    subject_id = serializers.UUIDField(
+        source="classroom_subject.id",
+        read_only=True,
+    )
+    subject_name = serializers.CharField(
+        source="classroom_subject.name",
+        read_only=True,
+    )
 
     assessment_name = serializers.CharField(
         source="assessment_type.name",
@@ -117,6 +187,7 @@ class AssessmentEntrySerializer(serializers.ModelSerializer):
         source="assessment_type.max_score",
         read_only=True,
     )
+
     percentage = serializers.FloatField(
         source="percentage_score",
         read_only=True,
@@ -124,8 +195,10 @@ class AssessmentEntrySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AssessmentRecord
-        fields = [
+        fields = (
             "id",
+            "subject_id",
+            "subject_name",
             "assessment_name",
             "category",
             "weight",
@@ -133,7 +206,7 @@ class AssessmentEntrySerializer(serializers.ModelSerializer):
             "score",
             "percentage",
             "date_taken",
-        ]
+        )
         read_only_fields = fields
 
 

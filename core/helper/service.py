@@ -27,13 +27,15 @@ def map_grade_and_point(
 ) -> tuple[str | None, Decimal | None, str | None]:
     """
     Convert a numeric score into grade, grade point, and remark
-    using the active GradeScale for the school.
-
-    Returns:
-        (grade, grade_point, remark)
+    using the active & published GradeScale for the school.
     """
+
     scales = (
-        GradeScale.objects.filter(school=school, is_active=True)
+        GradeScale.objects.filter(
+            school=school,
+            is_active=True,
+            is_published=True,   # ✅ IMPORTANT
+        )
         .order_by("-max_score", "order")
     )
 
@@ -49,21 +51,29 @@ def map_grade_and_point(
 
 
 # ---------------------------------------------------------------------
-# Subject Result Computation
+# Assessment Computation
 # ---------------------------------------------------------------------
 
-def _calculate_assessment_scores(
+def _calculate_assessment_components(
     *,
     student: Student,
     classroom_subject: Subject,
     policy: AssessmentPolicy,
 ) -> tuple[float, float, float]:
-    """Calculate CA, exam, and half-term scores from assessment records."""
-    total_ca: float = 0.0
-    exam_score: float = 0.0
-    half_term_score: float = 0.0
+    """
+    Compute:
+        - total_ca (0–100)
+        - exam_score (0–100)
+        - half_term_score (0–100)
+    """
 
-    for assessment_type in policy.assessment_types.all().order_by("order"):
+    total_ca = Decimal("0")
+    exam_score = Decimal("0")
+    half_term_score = Decimal("0")
+
+    assessment_types = policy.assessment_types.all().order_by("order")
+
+    for assessment_type in assessment_types:
         records = AssessmentRecord.objects.filter(
             student=student,
             classroom_subject=classroom_subject,
@@ -73,53 +83,88 @@ def _calculate_assessment_scores(
         if not records.exists():
             if assessment_type.is_optional:
                 continue
-            average_score = 0.0
+            average_percentage = Decimal("0")
         else:
-            total = sum(record.score or 0 for record in records)
-            average_score = total / records.count()
+            total_percentage = sum(
+                Decimal(record.percentage_score or 0)
+                for record in records
+            )
+            average_percentage = total_percentage / Decimal(records.count())
 
         if assessment_type.category == "EXAM":
-            exam_score = average_score
+            exam_score = average_percentage
+
         elif assessment_type.category == "HALF_TERM":
-            half_term_score = average_score
+            half_term_score = average_percentage
+
         else:
-            total_ca += average_score * (assessment_type.weight / 100)
+            # CA components are weighted INSIDE CA only
+            weight_fraction = Decimal(assessment_type.weight) / Decimal("100")
+            total_ca += average_percentage * weight_fraction
 
-    return total_ca, exam_score, half_term_score
+    return (
+        float(total_ca),
+        float(exam_score),
+        float(half_term_score),
+    )
 
 
-def _calculate_total_score(
+# ---------------------------------------------------------------------
+# Score Calculations
+# ---------------------------------------------------------------------
+
+def _calculate_final_score(
     *,
     total_ca: float,
     exam_score: float,
     half_term_score: float,
-    term_type: str,
+    term: AcademicTerm,
     policy: AssessmentPolicy,
 ) -> float:
-    """Calculate final score based on term type."""
-    score_map = {
-        "END_TERM": (
-            (total_ca / 100) * policy.ca_weight
-            + (exam_score / 100) * policy.exam_weight
-        ),
-        "HALF_TERM": total_ca + half_term_score,
-    }
-    total_score = score_map.get(term_type, total_ca + exam_score)
-    return min(total_score, 100.0)
+    """
+    Calculate final score based on term type.
+    """
+
+    if term.term_type == "END_OF_TERM":
+        final_score = (
+            (total_ca * policy.ca_weight) / 100
+            + (exam_score * policy.exam_weight) / 100
+        )
+
+    elif term.term_type == "HALF_TERM":
+        # ✅ FIX: Half-term is CA ONLY
+        final_score = total_ca
+
+    else:  # FULL_TERM or fallback
+        final_score = total_ca + exam_score
+
+    return min(float(final_score), 100.0)
 
 
 def _calculate_average_score(
     *,
-    total_score: float,
+    total_ca: float,
     half_term_score: float,
-    term_type: str,
+    term: AcademicTerm,
 ) -> float | None:
-    """Calculate average score for half-term reports."""
-    if term_type != "HALF_TERM":
-        return None
-    divisor = 2 if half_term_score else 1
-    return total_score / divisor
+    """
+    Average score applies ONLY to HALF_TERM.
+    """
 
+    if term.term_type != "HALF_TERM":
+        return None
+
+    scores = [total_ca]
+
+    if half_term_score:
+        scores.append(half_term_score)
+
+    return sum(scores) / len(scores)
+
+
+# ---------------------------------------------------------------------
+# Subject Result Computation
+# ---------------------------------------------------------------------
 
 @transaction.atomic
 def compute_subject_result(
@@ -129,60 +174,66 @@ def compute_subject_result(
     term: AcademicTerm,
 ) -> SubjectResult:
     """
-    Compute and persist a SubjectResult for a student in a subject
-    for the given academic term.
-
-    Business Rules:
-    - Missing required assessments count as 0
-    - Optional assessments are skipped if missing
-    - End Term = CA + Exam (weighted)
-    - Half Term = CA + Half-Term score
+    Compute and persist a SubjectResult.
+    SINGLE source of truth.
     """
 
     school = classroom_subject.school
 
-    policy = AssessmentPolicy.objects.filter(
-        school=school,
-        term=term,
-        is_active=True,
-    ).first()
+    policy = (
+        AssessmentPolicy.objects.filter(
+            school=school,
+            term=term,
+            is_active=True,
+        )
+        .first()
+    )
 
     if not policy:
         msg = "No active assessment policy configured for this term."
         raise ValidationError(
-            msg,
+            msg
         )
 
-    total_ca, exam_score, half_term_score = _calculate_assessment_scores(
+    # -------------------------------
+    # Compute assessment components
+    # -------------------------------
+    total_ca, exam_score, half_term_score = _calculate_assessment_components(
         student=student,
         classroom_subject=classroom_subject,
         policy=policy,
     )
 
-    total_score = _calculate_total_score(
+    total_score = _calculate_final_score(
         total_ca=total_ca,
         exam_score=exam_score,
         half_term_score=half_term_score,
-        term_type=term.term_type,
+        term=term,
         policy=policy,
     )
 
-    grade, grade_point, remark = map_grade_and_point(
-        school=school,
-        score=total_score,
-    )
-
     average_score = _calculate_average_score(
-        total_score=total_score,
+        total_ca=total_ca,
         half_term_score=half_term_score,
-        term_type=term.term_type,
+        term=term,
     )
 
-    target = student.target_grades.filter(
-        subject=classroom_subject.subject,
-        term=term,
-    ).first()
+    # -------------------------------
+    # Grade mapping (END OF TERM ONLY)
+    # -------------------------------
+    if term.term_type == "END_OF_TERM":
+        grade, grade_point, comment = map_grade_and_point(
+            school=school,
+            score=total_score,
+        )
+    else:
+        grade = None
+        grade_point = None
+        comment = "Progress assessment"
 
+    # -------------------------------
+    # Persist result
+    # -------------------------------
     subject_result, _ = SubjectResult.objects.update_or_create(
         student=student,
         classroom_subject=classroom_subject,
@@ -190,19 +241,14 @@ def compute_subject_result(
         defaults={
             "total_ca": total_ca,
             "exam_score": exam_score,
-            "half_term_score": half_term_score or None,
+            "half_term_score": half_term_score,
             "total_score": total_score,
-            "average_score": average_score,
+            "average_score": average_score or 0,
             "grade": grade,
             "grade_point": grade_point,
-            "remark": remark or "",
-            "target_grade": target.target_grade if target else None,
-            "target_point": target.target_point if target else None,
+            "comment": comment,
         },
     )
-
-    if target and grade_point:
-        target.check_achievement(grade, grade_point)
 
     return subject_result
 
@@ -216,20 +262,19 @@ def compute_term_summary_for_class(
     *,
     class_group: ClassRoom,
     term: AcademicTerm,
-):
+) -> list[TermReportSummary]:
     """
-    Compute TermReportSummary for all students in a class
-    and assign class positions.
+    Compute TermReportSummary and assign positions.
     """
 
     students = Student.objects.filter(class_group=class_group)
-    summaries = []
+    summaries: list[TermReportSummary] = []
 
     for student in students:
         results = SubjectResult.objects.filter(
             student=student,
             term=term,
-            classroom_subject__class_group=class_group,
+            classroom_subject__class_rooms=class_group,
         ).exclude(total_score__isnull=True)
 
         total_score = results.aggregate(
@@ -239,21 +284,15 @@ def compute_term_summary_for_class(
         subject_count = results.count() or 1
         average_score = total_score / subject_count
 
-        valid = results.exclude(grade_point__isnull=True)
-        total_points = valid.aggregate(
+        valid_results = results.exclude(grade_point__isnull=True)
+
+        total_points = valid_results.aggregate(
             total=Sum("grade_point"),
         )["total"] or 0
 
-        gpa = total_points / valid.count() if valid.exists() else 0
-
-        target_grades = student.target_grades.filter(term=term)
-        target_points = target_grades.aggregate(
-            total=Sum("target_point"),
-        )["total"] or 0
-
-        target_gpa = (
-            target_points / target_grades.count()
-            if target_grades.exists()
+        gpa = (
+            total_points / valid_results.count()
+            if valid_results.exists()
             else 0
         )
 
@@ -266,8 +305,6 @@ def compute_term_summary_for_class(
                 "average_score": average_score,
                 "total_points": total_points,
                 "gpa": round(gpa, 2),
-                "target_total_points": target_points,
-                "target_gpa": round(target_gpa, 2),
             },
         )
 
@@ -277,11 +314,13 @@ def compute_term_summary_for_class(
     return summaries
 
 
-def _assign_class_positions(summaries: list[TermReportSummary]) -> None:
+def _assign_class_positions(
+    summaries: list[TermReportSummary],
+) -> None:
     """
-    Assign class positions based on:
-    1. Total points (DESC)
-    2. Total score (DESC)
+    Rank by:
+        1. Total points
+        2. Total score
     """
 
     summaries.sort(
@@ -315,14 +354,15 @@ def compute_all_results_for_term(
     term: AcademicTerm,
 ):
     """
-    Compute all SubjectResults and TermReportSummary
-    for a class and term.
+    Compute all SubjectResults and TermReportSummary.
     """
 
-    subjects = Subject.objects.filter(class_group=class_group)
+    subjects = Subject.objects.filter(class_rooms=class_group)
 
     for subject in subjects:
-        for student in subject.students.all():
+        students = Student.objects.filter(class_group=class_group)
+
+        for student in students:
             compute_subject_result(
                 student=student,
                 classroom_subject=subject,

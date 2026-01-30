@@ -1,29 +1,54 @@
-from rest_framework import viewsets, filters
+from drf_spectacular.utils import extend_schema
+from rest_framework import filters
+from rest_framework import status
+from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from core.applications.academics.models import AcademicSession, AcademicTerm, Subject
-from core.applications.users.api.schemas import (
-    ACADEMIC_SESSION_SCHEMA,
-    ACADEMIC_TERM_SCHEMA,
-    TeacherViewSetSchema,
-)
+from core.applications.academics.models import AcademicSession
+from core.applications.academics.models import AcademicTerm
+from core.applications.academics.models import Subject
+from core.applications.academics.models import TeachingAssignment
+from core.applications.users.api.schemas import ACADEMIC_SESSION_SCHEMA
+from core.applications.users.api.schemas import ACADEMIC_TERM_SCHEMA
+from core.applications.users.api.schemas import SUBJECT_SCHEMA
+from core.applications.users.api.schemas import TeacherViewSetSchema
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicSessionSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicTermSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     AdminAssignClassroomsSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     AdminAssignSubjectsSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
+    CloseAcademicSessionSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
+    OpenAcademicSessionSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     SubjectSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherCreateTeachingAssignmentsSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherDetailSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherListSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherReassignTeachingAssignmentSerializer,
 )
-
 from core.applications.users.models import TeacherProfile
 from core.applications.users.permissions import IsPrincipalOrSchoolOwner
-from drf_spectacular.utils import extend_schema
 
 
 @ACADEMIC_SESSION_SCHEMA
@@ -53,6 +78,26 @@ class AcademicSessionViewSet(viewsets.ModelViewSet):
         instance.is_active = False
         instance.save(update_fields=["is_active"])
 
+    @action(detail=True, methods=["post"], url_path="open")
+    def open_session(self, request, pk=None):
+        session = self.get_object()
+        serializer = OpenAcademicSessionSerializer()
+        serializer.update(session, {})
+        return Response(
+            {"detail": "Academic session opened successfully."},
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="close")
+    def close_session(self, request, pk=None):
+        session = self.get_object()
+        serializer = CloseAcademicSessionSerializer()
+        serializer.update(session, {})
+        return Response(
+            {"detail": "Academic session closed successfully."},
+            status=status.HTTP_200_OK,
+        )
+
 
 # ============================================================================
 # Academic Term ViewSet
@@ -62,20 +107,20 @@ class AcademicTermViewSet(viewsets.ModelViewSet):
     """
     Professionally aligned ViewSet for Academic Terms.
 
-    Alignment with Serializer:
-    - Serializer enforces allowed term names.
-    - Prevents activation when session is inactive.
-    - Prevents duplicates.
-    - View enforces school scoping and optional filtering.
+    Responsibilities:
+    - Scoped to user's school
+    - Manages academic terms lifecycle
+    - Explicit control of score entry state (open/close)
     """
 
     serializer_class = AcademicTermSerializer
     permission_classes = [IsAuthenticated, IsPrincipalOrSchoolOwner]
 
     def get_queryset(self):
-        queryset = AcademicTerm.objects.filter(session__school=self.request.user.school)
+        queryset = AcademicTerm.objects.filter(
+            session__school=self.request.user.school
+        )
 
-        # Optional query filter
         session_id = self.request.query_params.get("session_id")
         if session_id:
             queryset = queryset.filter(session_id=session_id)
@@ -90,12 +135,74 @@ class AcademicTermViewSet(viewsets.ModelViewSet):
         instance.save(update_fields=["is_active"])
 
 
+    @action(detail=True, methods=["post"], url_path="open-score-entry")
+    def open_score_entry(self, request, pk=None):
+        """
+        Opens a term for score entry.
+
+        Business Rules:
+        - Only one term per session can be open at a time
+        - Session must be active
+        """
+        term = self.get_object()
+        session = term.session
+
+        if not session.is_active:
+            return Response(
+                {"detail": "Cannot open score entry for an inactive academic session."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Close any other active term in the same session
+        AcademicTerm.objects.filter(
+            session=session, is_active=True
+        ).exclude(pk=term.pk).update(is_active=False)
+
+        term.is_active = True
+        term.save(update_fields=["is_active"])
+
+        return Response(
+            {
+                "detail": f"{term.name} is now open for score entry.",
+                "term_id": term.id,
+                "is_active": term.is_active,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="close-score-entry")
+    def close_score_entry(self, request, pk=None):
+        """
+        Closes a term for score entry.
+        """
+        term = self.get_object()
+
+        if not term.is_active:
+            return Response(
+                {"detail": "This term is already closed for score entry."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        term.is_active = False
+        term.save(update_fields=["is_active"])
+
+        return Response(
+            {
+                "detail": f"{term.name} has been closed for score entry.",
+                "term_id": term.id,
+                "is_active": term.is_active,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+
 # ============================================================================
 # Subject ViewSet
 # ============================================================================
 
 
-@ACADEMIC_TERM_SCHEMA
+@SUBJECT_SCHEMA
 class SubjectViewSet(viewsets.ModelViewSet):
     """
     Professionally aligned ViewSet for Subjects.

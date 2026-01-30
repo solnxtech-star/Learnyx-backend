@@ -33,6 +33,8 @@ from rest_framework_simplejwt.settings import api_settings
 from core.applications.users.api.schemas import user_schema
 from core.applications.users.api.serializers.serializers import (
     CustomAdminCreateSerializer,
+)
+from core.applications.users.api.serializers.serializers import (
     CustomTeacherCreateSerializer,
 )
 from core.applications.users.api.serializers.serializers import (

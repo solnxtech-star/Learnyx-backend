@@ -119,7 +119,10 @@ class TargetGrade(TimeStampedModel):
     Stores target grades for students in subjects.
     """
 
-    student = auto_prefetch.ForeignKey("users.StudentProfile", on_delete=models.CASCADE)
+    student = auto_prefetch.ForeignKey(
+        "users.StudentProfile", on_delete=models.CASCADE,
+        related_name="target_grades",
+    )
     classroom_subject = auto_prefetch.ForeignKey(
         "academics.Subject", on_delete=models.CASCADE
     )

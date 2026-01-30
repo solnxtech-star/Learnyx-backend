@@ -40,7 +40,7 @@ class UserAdmin(auth_admin.UserAdmin):
         ),
         (_("Important dates"), {"fields": ("last_login",)}),
     )
-    list_display = ["id", "school", "email", "name", "role", "is_superuser"]
+    list_display = ["id", "school", "is_verified", "email", "name", "role", "is_superuser"]
     search_fields = ["name"]
     ordering = ["id"]
     add_fieldsets = (

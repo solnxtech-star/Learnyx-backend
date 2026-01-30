@@ -57,3 +57,10 @@ class AdminType(models.TextChoices):
     BURSAR = "bursar", "Bursar"
     HR = "hr", "Human Resources Admin"
     OTHER = "other", "Other"
+
+
+
+class AcademicTrack(models.TextChoices):
+    SCIENCE = "SCIENCE", "Science"
+    ARTS = "ARTS", "Arts"
+    COMMERCIAL = "COMMERCIAL", "Commercial"

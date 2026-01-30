@@ -1,10 +1,14 @@
-from django.db import models
-from core.helper.enums import AcademicClass, DayOfWeek, UserRole
-from core.helper.models import TimeStampedModel
 import auto_prefetch
-from django.utils.translation import gettext_lazy as _
 from django.core.exceptions import ValidationError
+from django.db import models
+from django.db.models import Q
+from django.utils.translation import gettext_lazy as _
 
+from core.helper.enums import AcademicClass
+from core.helper.enums import AcademicTrack
+from core.helper.enums import DayOfWeek
+from core.helper.enums import UserRole
+from core.helper.models import TimeStampedModel
 
 # Create your models here.
 
@@ -149,7 +153,7 @@ class AssessmentType(TimeStampedModel):
                 raise ValidationError(
                     _(
                         "Total weight for all assessment types in this policy would exceed 100%"
-                    )
+                    ),
                 )
 
 
@@ -190,26 +194,94 @@ class AssessmentRecord(TimeStampedModel):
 
 
 class Subject(TimeStampedModel):
+    """
+    Represents an academic subject offered by a school
+    (e.g., Mathematics, Physics, Literature).
+
+    Subjects are scoped to a school and can be assigned
+    to one or more classrooms.
+    """
+
     school = auto_prefetch.ForeignKey(
         "users.School",
         on_delete=models.CASCADE,
         related_name="subjects",
+        help_text="School that owns and manages this subject.",
     )
-    name = models.CharField(max_length=100)
-    code = models.CharField(max_length=20)
-    description = models.TextField(blank=True, null=True)
+
+    name = models.CharField(
+        max_length=100,
+        help_text="Full name of the subject (e.g., Mathematics, English Language).",
+    )
+
+    code = models.CharField(
+        max_length=20,
+        help_text="Short unique subject code within the school (e.g., MTH101, ENG).",
+    )
+
+    credit_hour = models.PositiveSmallIntegerField(
+        default=1,
+        help_text=_(
+            "Academic weight of the subject. Used for GPA, CGPA, "
+            "and weighted performance calculations."
+        ),
+    )
+
+    is_mandatory = models.BooleanField(
+        default=False,
+        help_text=_(
+            "Indicates whether this subject is mandatory for students "
+            "in the assigned classrooms."
+        ),
+    )
+
+    description = models.TextField(
+        blank=True,
+        null=True,
+        help_text=(
+            "Optional description providing additional details about the subject, "
+            "such as scope, syllabus focus, or special notes."
+        ),
+    )
 
     class_rooms = models.ManyToManyField(
         "academics.ClassRoom",
         related_name="subjects",
         blank=True,
+        help_text=(
+            "Classrooms where this subject is taught. "
+            "A subject may be assigned to multiple classrooms."
+        ),
     )
 
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(
+        default=True,
+        help_text=(
+            "Indicates whether the subject is currently active. "
+            "Inactive subjects are soft-deleted and hidden from normal listings."
+        ),
+    )
 
     class Meta(auto_prefetch.Model.Meta):
-        unique_together = ("school", "code")
         ordering = ["name"]
+        verbose_name = "Subject"
+        verbose_name_plural = "Subjects"
+
+        constraints = [
+            # Unique subject code per school (active only)
+            models.UniqueConstraint(
+                fields=["school", "code"],
+                condition=Q(is_active=True),
+                name="unique_active_subject_code_per_school",
+            ),
+
+            # Unique subject name per school (active only)
+            models.UniqueConstraint(
+                fields=["school", "name"],
+                condition=Q(is_active=True),
+                name="unique_active_subject_name_per_school",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.code} - {self.name}"
@@ -230,6 +302,11 @@ class ClassRoom(TimeStampedModel):
     arm = models.CharField(
         max_length=10,
         help_text=_("Class arm e.g. A, B, C"),
+    )
+    track = models.CharField(
+        max_length=20,
+        choices=AcademicTrack.choices, default=AcademicTrack.SCIENCE,
+        help_text="Academic track (Science, Arts, or Commercial)",
     )
 
     class Meta(auto_prefetch.Model.Meta):

@@ -1,19 +1,17 @@
 # academics/admin.py
 from django.contrib import admin
 
-from core.applications.academics.models import (
-    AcademicSession,
-    AcademicTerm,
-    AssessmentPolicy,
-    AssessmentRecord,
-    AssessmentType,
-    ClassRoom,
-    ClassSchedule,
-    Subject,
-    TeachingAssignment,
-    TimeSlot,
-    Timetable,
-)
+from core.applications.academics.models import AcademicSession
+from core.applications.academics.models import AcademicTerm
+from core.applications.academics.models import AssessmentPolicy
+from core.applications.academics.models import AssessmentRecord
+from core.applications.academics.models import AssessmentType
+from core.applications.academics.models import ClassRoom
+from core.applications.academics.models import ClassSchedule
+from core.applications.academics.models import Subject
+from core.applications.academics.models import TeachingAssignment
+from core.applications.academics.models import TimeSlot
+from core.applications.academics.models import Timetable
 
 
 @admin.register(AcademicSession)
