@@ -16,6 +16,7 @@ from core.applications.users.api.schemas import SUBJECT_SCHEMA
 from core.applications.users.api.schemas import TeacherViewSetSchema
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicSessionSerializer,
+    TeacherListWithAssignmentsSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicTermSerializer,
@@ -346,11 +347,11 @@ class TeacherViewSet(viewsets.ModelViewSet):
         methods=["POST"],
         detail=True,
         url_path="assign-teaching",
-        permission_classes=[IsAuthenticated],
+        permission_classes=[IsAuthenticated, IsPrincipalOrSchoolOwner],
     )
     def assign_teaching(self, request, pk=None):
         """
-        Teachers assign themselves to multiple classroom+subject combinations.
+        Admin assigns multiple classroom+subject combinations to a teacher.
         """
         teacher = self.get_object()
 
@@ -380,7 +381,7 @@ class TeacherViewSet(viewsets.ModelViewSet):
         methods=["PATCH"],
         detail=True,
         url_path="reassign-teaching/(?P<assignment_id>[^/.]+)",
-        permission_classes=[IsAuthenticated],
+        permission_classes=[IsAuthenticated, IsPrincipalOrSchoolOwner],
     )
     def reassign_teaching(self, request, pk=None, assignment_id=None):
         """
@@ -408,3 +409,20 @@ class TeacherViewSet(viewsets.ModelViewSet):
         serializer.save()
 
         return Response({"message": "Teaching assignment updated."})
+
+    @action(
+        methods=["GET"],
+        detail=False,  # Not detail=True, because it's a list of all teachers
+        url_path="list-with-assignments",
+        permission_classes=[IsAuthenticated, IsPrincipalOrSchoolOwner],
+    )
+    def list_with_assignments(self, request):
+        """
+        List all teachers in the school with classrooms and subjects assigned.
+        """
+        school = request.user.school
+        teachers = TeacherProfile.objects.filter(user__school=school).prefetch_related(
+            "classrooms", "subjects",
+        )
+        serializer = TeacherListWithAssignmentsSerializer(teachers, many=True)
+        return Response(serializer.data)

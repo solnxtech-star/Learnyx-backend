@@ -1,6 +1,8 @@
 
 
 from django.db import transaction
+from django.db.models.functions import Trim
+from django.db.models.functions import Upper
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
@@ -13,12 +15,15 @@ class GradeScaleSerializer(serializers.ModelSerializer):
     Defines grade brackets and points for a school's grading system.
 
     Example:
-        {"grade": "A", "min_score": 75, "max_score": 100, "point": 5.0}
+        {"grade": "A1", "min_score": 75, "max_score": 100, "point": 5.0}
 
     Attributes:
         school_name (str): Read-only field showing school name
         score_range (str): Read-only field showing formatted score range
     """
+
+    MAX_SCORE = 100
+    MIN_SCORE = 0
 
     school_name = serializers.CharField(source="school.name", read_only=True)
     score_range = serializers.SerializerMethodField()
@@ -44,10 +49,28 @@ class GradeScaleSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at", "school"]
 
+    # ---------------------------------------------------------
+    # Helpers
+    # ---------------------------------------------------------
     def get_score_range(self, obj):
         """Returns formatted score range (e.g., '75-100')"""
         return f"{obj.min_score}-{obj.max_score}"
 
+    def to_internal_value(self, data):
+        """
+        Normalize inputs before validation.
+        Ensures grade values are clean and consistent.
+        """
+        internal = super().to_internal_value(data)
+
+        if internal.get("grade"):
+            internal["grade"] = internal["grade"].strip().upper()
+
+        return internal
+
+    # ---------------------------------------------------------
+    # Validation
+    # ---------------------------------------------------------
     def validate(self, data):
         """
         Validate grade scale data.
@@ -55,37 +78,35 @@ class GradeScaleSerializer(serializers.ModelSerializer):
         Ensures:
         1. min_score <= max_score
         2. Scores are between 0 and 100
-        3. No overlapping score ranges within school
-        4. Grade is unique within school
-
-        Args:
-            data (dict): The grade scale data to validate
-
-        Returns:
-            dict: Validated data
-
-        Raises:
-            serializers.ValidationError: If validation fails
+        3. No overlapping score ranges within the same school
+        4. Grade is unique per school (case-insensitive, trimmed)
         """
+        request = self.context.get("request")
+        school = request.user.school
+
         min_score = data.get("min_score")
         max_score = data.get("max_score")
         grade = data.get("grade")
 
-        if min_score and max_score:
-            # Check min_score <= max_score
+        # =============================
+        # Score range validation
+        # =============================
+        if min_score is not None and max_score is not None:
             if min_score > max_score:
                 raise serializers.ValidationError(
-                    _("Minimum score cannot be greater than maximum score")
+                    {"min_score": _(
+                        "Minimum score cannot be greater than maximum score"
+                    )},
                 )
 
-            # Check scores are within 0-100 range
-            if min_score < 0 or max_score > 100:
-                raise serializers.ValidationError(_("Scores must be between 0 and 100"))
+            if min_score < self.MIN_SCORE or max_score > self.MAX_SCORE:
+                raise serializers.ValidationError(
+                    {"min_score": _("Scores must be between 0 and 100")}
+                )
 
-            # Check for overlapping score ranges
-            school = self.context["request"].user.school
             overlapping = (
-                GradeScale.objects.filter(school=school, is_active=True)
+                GradeScale.objects
+                .filter(school=school, is_active=True)
                 .exclude(min_score__gt=max_score)
                 .exclude(max_score__lt=min_score)
             )
@@ -95,14 +116,22 @@ class GradeScaleSerializer(serializers.ModelSerializer):
 
             if overlapping.exists():
                 raise serializers.ValidationError(
-                    _("Score range overlaps with existing grade scale")
+                    {"min_score": _("Score range overlaps with an existing grade")}
                 )
 
-        # Check grade uniqueness
+        # =============================
+        # Grade uniqueness validation
+        # =============================
         if grade:
-            school = self.context["request"].user.school
-            existing = GradeScale.objects.filter(
-                school=school, grade=grade, is_active=True
+            normalized_grade = grade.strip().upper()
+
+            existing = (
+                GradeScale.objects
+                .filter(school=school, is_active=True)
+                .annotate(
+                    norm_grade=Upper(Trim("grade"))
+                )
+                .filter(norm_grade=normalized_grade)
             )
 
             if self.instance:
@@ -110,22 +139,24 @@ class GradeScaleSerializer(serializers.ModelSerializer):
 
             if existing.exists():
                 raise serializers.ValidationError(
-                    _("Grade '%(grade)s' already exists in your grading system")
-                    % {"grade": grade}
+                    {"grade": _("Grade '%s' already exists for this school") % normalized_grade}
                 )
 
         return data
 
-
 class GradeScaleBulkCreateSerializer(serializers.Serializer):
     """
     Serializer for bulk creating or updating multiple grade scales (UPSERT).
+
     Ensures:
-    - Existing grades are UPDATED, not duplicated
-    - New grades are CREATED
-    - Gaps and overlaps are validated
-    - System remains consistent
+    - Scores fully cover 0–100 (no gaps, no overlaps)
+    - Grades are normalized and unique in payload
+    - Points and score ranges are valid
     """
+
+    MAX_SCORE = 100
+    MIN_SCORE = 0
+    MAX_POINT = 5.0
 
     scales = serializers.ListField(
         child=serializers.DictField(),
@@ -134,86 +165,135 @@ class GradeScaleBulkCreateSerializer(serializers.Serializer):
         help_text=_("List of grade scale configurations"),
     )
 
+    # ---------------------------------------------------------
+    # Validation
+    # ---------------------------------------------------------
     def validate_scales(self, value):
-        """
-        Collective validation of all grade scales.
-        """
-        grades = set()
+        request = self.context["request"]
+
+        normalized_grades = set()
+
+        # Normalize grade values
+        for scale in value:
+            grade = scale.get("grade")
+            if not grade or not grade.strip():
+                raise serializers.ValidationError(_("Each scale must have a grade"))
+            scale["grade"] = grade.strip().upper()
 
         # Sort by min_score
-        sorted_scales = sorted(value, key=lambda x: x["min_score"])
+        try:
+            sorted_scales = sorted(value, key=lambda x: x["min_score"])
+        except KeyError:
+            raise serializers.ValidationError(_("Each scale must include min_score"))
 
         # Must start at 0
-        if sorted_scales[0]["min_score"] != 0:
-            raise serializers.ValidationError(_("First grade scale must start at 0"))
+        if sorted_scales[0]["min_score"] != self.MIN_SCORE:
+            raise serializers.ValidationError(_("Grade scales must start at 0"))
 
-        # Must end at 100
-        if sorted_scales[-1]["max_score"] != 100:
-            raise serializers.ValidationError(_("Last grade scale must end at 100"))
+        previous_max = self.MIN_SCORE - 1
 
-        previous_max = -1
-        for i, scale in enumerate(sorted_scales):
-            min_score = scale["min_score"]
-            max_score = scale["max_score"]
-            grade = scale["grade"]
+        for index, scale in enumerate(sorted_scales):
+            min_score = scale.get("min_score")
+            max_score = scale.get("max_score")
+            grade = scale.get("grade")
+            point = scale.get("point")
+            display_name = scale.get("display_name")
+            remark = scale.get("remark")
 
-            # Check for gaps
+            # -----------------------------
+            # Score validation
+            # -----------------------------
+            if min_score is None or max_score is None:
+                raise serializers.ValidationError(
+                    _("Both min_score and max_score are required")
+                )
+
+            if min_score > max_score:
+                raise serializers.ValidationError(
+                    _("Minimum score cannot exceed maximum score")
+                )
+
+            if min_score < self.MIN_SCORE or max_score > self.MAX_SCORE:
+                raise serializers.ValidationError(
+                    _("Scores must be between 0 and 100")
+                )
+
+            # Gap check
             if min_score != previous_max + 1:
                 raise serializers.ValidationError(
-                    _("Gap in score range between %(prev)d and %(next)d") % {
-                        "prev": previous_max,
-                        "next": min_score
-                    }
+                    _("Gap detected before grade '%(grade)s'") % {"grade": grade}
                 )
 
-            # Overlaps
-            if min_score <= previous_max:
+            # -----------------------------
+            # Grade uniqueness (payload)
+            # -----------------------------
+            if grade in normalized_grades:
                 raise serializers.ValidationError(
-                    _("Overlap in score ranges at scale %(index)d") % {"index": i + 1}
+                    _("Duplicate grade '%(grade)s' in payload") % {"grade": grade}
                 )
+            normalized_grades.add(grade)
 
-            # Duplicate grades within payload
-            if grade in grades:
+            # -----------------------------
+            # Point validation
+            # -----------------------------
+            if point is None:
                 raise serializers.ValidationError(
-                    _("Duplicate grade '%(grade)s' found") % {"grade": grade}
+                    _("Each grade must define a point value")
                 )
 
-            grades.add(grade)
+            if not (0 <= point <= self.MAX_POINT):
+                raise serializers.ValidationError(
+                    _("Point for '%(grade)s' must be between 0 and 5")
+                    % {"grade": grade}
+                )
+
+            # -----------------------------
+            # Display / remark validation
+            # -----------------------------
+            if display_name is not None and not display_name.strip():
+                raise serializers.ValidationError(_("Display name cannot be empty"))
+
+            if remark is not None and not remark.strip():
+                raise serializers.ValidationError(_("Remark cannot be empty"))
+
             previous_max = max_score
+
+        # Final coverage check
+        if previous_max != self.MAX_SCORE:
+            raise serializers.ValidationError(
+                _("Grade scales must fully cover scores up to 100")
+            )
 
         return value
 
+    # ---------------------------------------------------------
+    # Create / Update
+    # ---------------------------------------------------------
     @transaction.atomic
     def create(self, validated_data):
-        """
-        UPSERT (Update-or-Create) bulk logic.
-        """
         request = self.context["request"]
         school = request.user.school
 
         scales = []
 
         for index, scale_data in enumerate(validated_data["scales"]):
-
-            obj, created = GradeScale.objects.update_or_create(
+            obj, _ = GradeScale.objects.update_or_create(
                 school=school,
-                grade=scale_data["grade"],                     # Unique per school
-                is_honors=scale_data.get("is_honors", False),  # Part of unique key
+                grade=scale_data["grade"],
                 defaults={
                     "display_name": scale_data.get("display_name"),
                     "min_score": scale_data["min_score"],
                     "max_score": scale_data["max_score"],
                     "point": scale_data["point"],
                     "remark": scale_data.get("remark", ""),
-                    "order": index,
+                    "is_honors": scale_data.get("is_honors", False),
+                    "order": index + 1,
                     "is_active": True,
-                }
+                },
             )
-
             scales.append(obj)
 
         return {"scales": scales}
-
 
 
 class DefaultGradingSystemSerializer(serializers.Serializer):

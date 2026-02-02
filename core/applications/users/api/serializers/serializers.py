@@ -224,8 +224,12 @@ class BaseRoleCreateSerializer(UserCreateSerializer):
 
 class CustomUserCreateSerializer(BaseRoleCreateSerializer):
     """
-    Student signup serializer.
-    Automatically syncs current_class from classroom.
+    Student signup serializer using school_code.
+
+    - Validates school via school_code
+    - Validates classroom belongs to that school
+    - Creates User with only proper fields
+    - Creates StudentProfile with classroom and other profile fields
     """
 
     role = UserRole.STUDENT
@@ -239,16 +243,12 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
         "classroom_id",
     ]
 
+    # Extra profile fields
     gender = serializers.ChoiceField(choices=Gender.choices, required=False)
     guardian_name = serializers.CharField(required=False, allow_blank=True)
     guardian_phone = serializers.CharField(required=False, allow_blank=True)
     address = serializers.CharField(required=False, allow_blank=True)
-
-    classroom_id = serializers.CharField(
-        write_only=True,
-        required=False,
-        allow_blank=True,
-    )
+    classroom_id = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     school_code = serializers.CharField(write_only=True, required=True)
 
@@ -259,43 +259,54 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
             "guardian_phone",
             "address",
             "classroom_id",
+            "school_code",
         )
 
-    def validate_classroom_id(self, value):
-        """
-        Ensure classroom exists and belongs to the selected school.
-        """
-        if not value:
-            return None
+    # -----------------------------
+    # Validate school & classroom
+    # -----------------------------
+    def validate(self, attrs):
+        # First call parent validation to extract profile fields and handle password confirmation
+        attrs = super().validate(attrs)
 
-        request = self.context["request"]
-        school = getattr(request, "school", None) or request.user.school
-
+        # Now validate school and classroom
+        school_code = self._school_code  # Already extracted by parent class
         try:
-            classroom = ClassRoom.objects.get(id=value, school=school)
-        except ClassRoom.DoesNotExist:
-            raise serializers.ValidationError("Invalid classroom selected.")
+            self.school = School.objects.get(school_code=school_code)
+        except School.DoesNotExist:
+            raise serializers.ValidationError({"school_code": "Invalid school code."})
 
-        return classroom
+        # Extract classroom_id from profile data (already extracted by parent)
+        classroom_id = self._profile_data.get("classroom_id")
+        if classroom_id:
+            try:
+                self.classroom = ClassRoom.objects.get(id=classroom_id, school=self.school)
+                # Remove classroom_id from profile_data since we'll handle it separately
+                del self._profile_data["classroom_id"]
+            except ClassRoom.DoesNotExist:
+                raise serializers.ValidationError({"classroom_id": "Invalid classroom selected."})
+        else:
+            self.classroom = None
 
-    def create_profile(self, user, validated_data):
-        """
-        Creates StudentProfile and auto-syncs current_class.
-        """
-        classroom = validated_data.pop("classroom_id", None)
+        return attrs
 
-        profile = StudentProfile.objects.create(
-            user=user,
-            **validated_data,
-        )
+    # -----------------------------
+    # Override create to handle classroom assignment
+    # -----------------------------
+    @transaction.atomic
+    def create(self, validated_data):
+        # Call parent create method which handles user creation and basic profile creation
+        user = super().create(validated_data)
 
-        if classroom:
-            profile.classroom = classroom
-            profile.current_class = classroom.academic_class
+        # Additional handling for classroom assignment
+        if self.classroom:
+            # Get the created profile
+            profile = StudentProfile.objects.get(user=user)
+            profile.classroom = self.classroom
+            profile.current_class = self.classroom.academic_class
             profile.save(update_fields=["classroom", "current_class"])
 
-        return profile
-
+        return user
 
 class CustomTeacherCreateSerializer(BaseRoleCreateSerializer):
     role = UserRole.TEACHER

@@ -8,6 +8,7 @@ from core.applications.academics.models import AssessmentRecord
 from core.applications.academics.models import AssessmentType
 from core.applications.academics.models import ClassRoom
 from core.applications.academics.models import ClassSchedule
+from core.applications.academics.models import StudentSubjectEnrollment
 from core.applications.academics.models import Subject
 from core.applications.academics.models import TeachingAssignment
 from core.applications.academics.models import TimeSlot
@@ -137,3 +138,14 @@ class TimetableAdmin(admin.ModelAdmin):
     list_filter = ("school", "academic_year", "term", "is_active")
     search_fields = ("name", "academic_year", "term")
     filter_horizontal = ("schedules",)
+
+
+@admin.register(StudentSubjectEnrollment)
+class StudentSubjectEnrollmentAdmin(admin.ModelAdmin):
+    list_display = ("id", "student", "subject", "assigned_by", "session", "term")
+    list_filter = ("assigned_by", "subject")
+    search_fields = (
+        "student__user__email",
+        "student__user__name",
+        "subject__name",
+    )

@@ -760,7 +760,7 @@ class AdminAssignSubjectsSerializer(serializers.Serializer):
     """
 
     subject_ids = serializers.ListField(
-        child=serializers.UUIDField(),
+        child=serializers.CharField(),
         allow_empty=False,
         help_text="List of subject UUIDs to assign to the teacher.",
     )
@@ -789,3 +789,28 @@ class AdminAssignSubjectsSerializer(serializers.Serializer):
         teacher_profile.subjects.set(self.validated_data["subject_ids"])
         teacher_profile.save()
         return teacher_profile
+
+
+class ClassroomSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClassRoom
+        fields = ["id", "academic_class"]
+
+
+
+class TeacherListWithAssignmentsSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source="user.name")
+    user_email = serializers.EmailField(source="user.email")
+    classrooms = ClassroomSerializer(many=True, read_only=True)
+    subjects = SubjectSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = TeacherProfile
+        fields = [
+            "id",
+            "user_name",
+            "user_email",
+            "staff_id",
+            "classrooms",
+            "subjects",
+        ]

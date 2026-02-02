@@ -1,4 +1,5 @@
 import auto_prefetch
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
@@ -285,6 +286,59 @@ class Subject(TimeStampedModel):
 
     def __str__(self):
         return f"{self.code} - {self.name}"
+
+
+class StudentSubjectEnrollment(TimeStampedModel):
+    """
+    Tracks subjects assigned to each student.
+
+    This allows:
+        - Different students in the same class to take different subjects
+        - Tracking who assigned the subject and when
+        - Future support for grades, electives, and promotions
+    """
+
+    student = models.ForeignKey(
+        "users.StudentProfile",
+        on_delete=models.CASCADE,
+        related_name="subject_enrollments",
+    )
+
+    subject = models.ForeignKey(
+        "academics.Subject",
+        on_delete=models.CASCADE,
+        related_name="student_enrollments",
+    )
+
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="Admin or staff who assigned this subject",
+    )
+
+    session = models.ForeignKey(
+        "academics.AcademicSession",
+        on_delete=models.CASCADE,
+        related_name="student_subject_enrollments",
+        help_text="Session in which this subject is assigned",
+    )
+
+    term = models.ForeignKey(
+        "academics.AcademicTerm",
+        on_delete=models.CASCADE,
+        related_name="student_subject_enrollments",
+        help_text="Term in which this subject is assigned",
+    )
+
+    class Meta(auto_prefetch.Model.Meta):
+        unique_together = ("student", "subject", "session", "term")
+        ordering = ["student", "subject"]
+
+    def __str__(self):
+        return f"{self.student} → {self.subject} ({self.session} - {self.term})"
+
 
 class ClassRoom(TimeStampedModel):
     school = auto_prefetch.ForeignKey(

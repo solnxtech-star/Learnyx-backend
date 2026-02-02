@@ -1,4 +1,3 @@
-from core.applications.users.api.serializers.admin_serializers import ClassRoomCreateSerializer, ClassRoomSerializer
 from drf_spectacular.utils import OpenApiExample
 from drf_spectacular.utils import OpenApiParameter
 from drf_spectacular.utils import OpenApiResponse
@@ -6,6 +5,7 @@ from drf_spectacular.utils import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import extend_schema_view
 from rest_framework import serializers
+
 
 from core.applications.users.api.serializers import serializers as user_serializers
 from core.applications.users.api.serializers.academic_section_serializers import (
@@ -33,10 +33,19 @@ from core.applications.users.api.serializers.academic_section_serializers import
     TeacherListSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
+    TeacherListWithAssignmentsSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherReassignTeachingAssignmentSerializer,
 )
 from core.applications.users.api.serializers.admin_accessment_serializers import (
-    AssessmentPolicySerializer,
+    AssessmentPolicyCreateSerializer,
+)
+from core.applications.users.api.serializers.admin_accessment_serializers import (
+    AssessmentPolicyListSerializer,
+)
+from core.applications.users.api.serializers.admin_accessment_serializers import (
+    AssessmentPolicyUpdateSerializer,
 )
 from core.applications.users.api.serializers.admin_accessment_serializers import (
     DefaultAssessmentPolicySerializer,
@@ -49,6 +58,12 @@ from core.applications.users.api.serializers.admin_grading_serializers import (
 )
 from core.applications.users.api.serializers.admin_grading_serializers import (
     GradeScaleSerializer,
+)
+from core.applications.users.api.serializers.admin_serializers import (
+    ClassRoomCreateSerializer,
+)
+from core.applications.users.api.serializers.admin_serializers import (
+    ClassRoomSerializer,
 )
 from core.helper.enums import AdmissionStatus
 
@@ -1024,6 +1039,7 @@ TeacherViewSetSchema = extend_schema_view(
     # LIST TEACHERS
     # ============================================================
     list=extend_schema(
+        tags=["Teacher Management", "Admin Management"],
         summary="List All Teachers (School Restricted)",
         description=(
             "Returns a list of teachers belonging to the authenticated user's school.\n\n"
@@ -1037,6 +1053,7 @@ TeacherViewSetSchema = extend_schema_view(
     # RETRIEVE SINGLE TEACHER
     # ============================================================
     retrieve=extend_schema(
+        tags=["Teacher Management", "Admin Management"],
         summary="Retrieve a Teacher Profile",
         description=(
             "Fetch detailed information about a single teacher, including:\n"
@@ -1051,6 +1068,7 @@ TeacherViewSetSchema = extend_schema_view(
     # ADMIN: ASSIGN CLASSROOMS
     # ============================================================
     assign_classrooms=extend_schema(
+        tags=["Admin Management"],
         summary="Assign Classrooms to Teacher (Admin Only)",
         description=(
             "**ADMIN ACTION**\n\n"
@@ -1070,13 +1088,14 @@ TeacherViewSetSchema = extend_schema_view(
             OpenApiExample(
                 "Assign Classrooms Example",
                 value={"classroom_ids": ["uuid-123", "uuid-456"]},
-            )
+            ),
         ],
     ),
     # ============================================================
     # ADMIN: ASSIGN SUBJECTS
     # ============================================================
     assign_subjects=extend_schema(
+        tags=["Admin Management"],
         summary="Assign Subjects to Teacher (Admin Only)",
         description=(
             "**ADMIN ACTION**\n\n"
@@ -1097,6 +1116,7 @@ TeacherViewSetSchema = extend_schema_view(
     # TEACHER: BULK CREATE TEACHING ASSIGNMENTS
     # ============================================================
     assign_teaching=extend_schema(
+        tags=["Admin Management"],
         summary="Teacher: Bulk Assign Classroom + Subject Combinations",
         description=(
             "**TEACHER ACTION**\n\n"
@@ -1129,6 +1149,7 @@ TeacherViewSetSchema = extend_schema_view(
     # TEACHER: UPDATE SINGLE TEACHING ASSIGNMENT
     # ============================================================
     reassign_teaching=extend_schema(
+        tags=["Admin Management"],
         summary="Teacher: Update an Existing Teaching Assignment",
         description=(
             "**TEACHER ACTION**\n\n"
@@ -1150,6 +1171,24 @@ TeacherViewSetSchema = extend_schema_view(
             ),
         },
     ),
+    # ============================================================
+    # LIST TEACHERS WITH CLASSROOMS & SUBJECTS
+
+    list_with_assignments=extend_schema(
+        tags=["Admin Management"],
+        summary="List Teachers with Assigned Classrooms and Subjects",
+        description=(
+            "Returns all teachers in the authenticated user's school, including:\n"
+            " - Teacher personal info (name, email, staff ID)\n"
+            " - Classrooms assigned to each teacher\n"
+            " - Subjects assigned to each teacher\n\n"
+            "**Notes:**\n"
+            " - Only teachers within the admin/principal's school are returned\n"
+            " - Classroom and subject details are included as nested objects\n"
+        ),
+        responses={200: TeacherListWithAssignmentsSerializer(many=True)},
+    ),
+
 )
 
 GRADING_SCHEMA = extend_schema_view(
@@ -1205,6 +1244,7 @@ GRADING_SCHEMA = extend_schema_view(
         ),
         responses={204: OpenApiResponse(description="Grade scale deleted")},
     ),
+
 )
 
 
@@ -1275,62 +1315,164 @@ AssessmentPolicySchema = extend_schema_view(
     list=extend_schema(
         summary="List assessment policies",
         description="""
-Retrieve all assessment policies that belong to the authenticated user's school.
+Retrieve all assessment policies belonging to the authenticated user's school.
 
-What happens:
-- Teachers can view, but cannot create or edit.
-- Filters by the requesting user's school automatically.
+Behavior:
+- Automatically filtered by the user's school.
+- Returns both active and inactive policies.
+- Includes nested assessment types and computed total weight.
 - Supports search and ordering.
-"""
+
+Serializer:
+- Uses **AssessmentPolicyListSerializer**
+""",
+        responses=AssessmentPolicyListSerializer,
     ),
+
     retrieve=extend_schema(
-        summary="Retrieve a single assessment policy",
+        summary="Retrieve an assessment policy",
         description="""
-Fetch one AssessmentPolicy and its nested AssessmentTypes.
+Retrieve a single assessment policy by ID.
 
-What happens:
-- Ensures the policy belongs to the user's school.
-- Returns full policy details including CA/exam weights.
-"""
+Behavior:
+- Ensures the policy belongs to the authenticated user's school.
+- Returns full policy details including:
+  - Term
+  - CA and Exam weights
+  - Nested assessment types
+  - Computed total weight
+
+Serializer:
+- Uses **AssessmentPolicyListSerializer**
+""",
+        responses=AssessmentPolicyListSerializer,
     ),
+
     create=extend_schema(
-        summary="Create a new assessment policy",
+        summary="Create an assessment policy",
         description="""
-Admins can create AssessmentPolicy.
+Create a new assessment policy for a specific academic term.
 
-Validation:
-- ca_weight + exam_weight must equal 100
-- Automatically attaches the policy to the user's school
+Validation rules:
+- `ca_weight + exam_weight` **must equal 100%**
+- Only **one active policy per school and term** is allowed
 
-What happens internally:
-1. Serializer validates and enforces weight rules.
-2. perform_create() attaches school.
-3. Returns the created policy with nested types = [] initially.
-"""
+Behavior:
+- School is automatically inferred from the authenticated user.
+- Assessment types are not created here (added separately or via defaults).
+
+Serializer:
+- Request: **AssessmentPolicyCreateSerializer**
+- Response: **AssessmentPolicyListSerializer**
+
+Errors:
+- Returns validation errors if business rules are violated.
+""",
+        request=AssessmentPolicyCreateSerializer,
+        responses=AssessmentPolicyListSerializer,
     ),
+
     update=extend_schema(
         summary="Update an assessment policy",
         description="""
-Admins only. Updates policy fields.
+Update an existing assessment policy.
 
-What happens:
-- Serializer validates again.
-- School is forced to remain the same (cannot be changed).
-"""
+Rules:
+- CA + Exam weights must still equal 100%.
+- Term cannot be changed.
+- Only one active policy per term is allowed when activating.
+
+Serializer:
+- Request: **AssessmentPolicyUpdateSerializer**
+- Response: **AssessmentPolicyListSerializer**
+""",
+        request=AssessmentPolicyUpdateSerializer,
+        responses=AssessmentPolicyListSerializer,
     ),
+
     partial_update=extend_schema(
-        summary="Partially update assessment policy",
-        description="Same as update, but allows updating only part of the fields."
+        summary="Partially update an assessment policy",
+        description="""
+Partially update an assessment policy.
+
+Behavior:
+- Same validation rules as full update.
+- Only provided fields are updated.
+- Term remains immutable.
+
+Serializer:
+- Request: **AssessmentPolicyUpdateSerializer**
+- Response: **AssessmentPolicyListSerializer**
+""",
+        request=AssessmentPolicyUpdateSerializer,
+        responses=AssessmentPolicyListSerializer,
     ),
+
     destroy=extend_schema(
         summary="Delete an assessment policy",
         description="""
-Hard delete. (Not soft-deleted.)
+Delete an assessment policy permanently.
 
-What happens:
-- Ensures policy belongs to user's school.
-- Deletes the policy and its related types.
-"""
+Behavior:
+- Ensures the policy belongs to the authenticated user's school.
+- Deletes the policy and all related assessment types.
+- This is a **hard delete**.
+
+Response:
+- 204 No Content on success.
+""",
+        responses={204: None},
+    ),
+
+    # -------------------------------------------------
+    # Custom actions
+    # -------------------------------------------------
+
+    apply_default=extend_schema(
+        summary="Apply a default assessment policy",
+        description="""
+Create and activate a default assessment policy using a predefined configuration.
+
+Available configurations:
+- **standard_60_40** → Exam 60%, Tests 40%
+- **half_term** → CA 50%, Half Term Exam 50%
+- **detailed** → Tests, Assignments, Exam
+
+Behavior:
+- Deactivates any existing active policy for the selected term.
+- Creates the policy and its assessment types atomically.
+- School is inferred from the authenticated user.
+
+Serializer:
+- Request: **DefaultAssessmentPolicySerializer**
+- Response: **AssessmentPolicyListSerializer**
+
+Errors:
+- Returns validation error if the selected term does not belong to the user's school.
+""",
+        request=DefaultAssessmentPolicySerializer,
+        responses=AssessmentPolicyListSerializer,
+    ),
+
+    active_for_term=extend_schema(
+        summary="Get active assessment policy for a term",
+        description="""
+Retrieve the active assessment policy for a given academic term.
+
+Query Parameters:
+- `term` (optional): AcademicTerm ID
+
+Behavior:
+- If `term` is provided:
+  - Returns the active policy for that term.
+  - Returns 404 if no active policy exists.
+- If `term` is not provided:
+  - Returns all active policies for the school.
+
+Serializer:
+- Response: **AssessmentPolicyListSerializer**
+""",
+        responses=AssessmentPolicyListSerializer,
     ),
 )
 
@@ -1370,7 +1512,7 @@ ActivePolicyForTermSchema = extend_schema(
             type=int
         ),
     ],
-    responses={200: AssessmentPolicySerializer},
+    responses={200: AssessmentPolicyListSerializer},
     summary="Get active policy for a term",
     description="""
 Fetch the currently active AssessmentPolicy for a specific term.
@@ -1391,46 +1533,60 @@ What happens:
 
 AssessmentTypeSchema = extend_schema_view(
     list=extend_schema(
-        summary="List assessment types",
+        summary="List Assessment Types",
         description="""
-List all AssessmentType objects.
+Retrieve all AssessmentType objects for the current user's school.
 
 Features:
-- Supports filtering by ?policy=<policy_id>
-- Only returns types belonging to current user's school
+- Supports filtering by `?policy=<policy_id>`.
+- Returns only types belonging to the requesting user's school.
+- Includes `policy_name` and `category_display` for readability.
 """
     ),
     retrieve=extend_schema(
-        summary="Retrieve a single assessment type",
-        description="Return details for a single AssessmentType."
+        summary="Retrieve a single Assessment Type",
+        description="""
+Return detailed information for a single AssessmentType instance.
+
+Includes:
+- Parent policy info (`policy_name`)
+- Category display (`category_display`)
+"""
     ),
     create=extend_schema(
-        summary="Create a new assessment type",
+        summary="Create a new Assessment Type",
         description="""
 Admins only.
 
-Validation rules:
-- weight must not cause total policy weight to exceed 100%
-- policy must belong to current user's school
-
-What happens:
-1. Serializer validates.
-2. perform_create() prevents cross-school type insertion.
-3. Type is created under the policy.
+Validation & behavior:
+1. `policy` must belong to the request user's school.
+2. `weight` must not cause the total policy weight to exceed 100%.
+3. Automatically assigns `order` if not provided.
+4. For default policies, creation will fail if total weight exceeds 100%.
+5. The type is saved under the specified policy.
 """
     ),
     update=extend_schema(
-        summary="Update assessment type",
+        summary="Update an Assessment Type",
         description="""
 Admins only.
 
-What happens:
-- Ensures a type cannot be moved to a policy of another school.
-- Enforces weight constraints again.
+Validation & behavior:
+1. Type cannot be moved to a policy of another school.
+2. Weight constraints are enforced:
+   - Excludes current type from weight calculation.
+   - Total weight for the policy cannot exceed 100%.
+3. `order` can be updated manually or auto-adjusted.
 """
     ),
     destroy=extend_schema(
-        summary="Delete an assessment type",
-        description="Hard delete an AssessmentType."
+        summary="Delete an Assessment Type",
+        description="""
+Hard delete an AssessmentType.
+
+Behavior:
+- Type is removed from the database.
+- Ensure that the deletion does not break any active assessment policies or calculations.
+"""
     ),
 )

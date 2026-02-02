@@ -1,8 +1,22 @@
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiExample
 from drf_spectacular.utils import OpenApiParameter
+from drf_spectacular.utils import OpenApiResponse
 from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import extend_schema_view
 
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    AdminAssignSubjectsToStudentSerializer,
+)
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    StudentCurrentClassSerializer,
+)
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    StudentDetailSerializer,
+)
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    StudentListSerializer,
+)
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     AssessmentEntrySerializer,
 )
@@ -26,6 +40,89 @@ from core.applications.academics.api.serializers.teachers_dashboard_serializers 
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     TeacherClassroomSerializer,
+)
+
+STUDENT_VIEWSET_SCHEMA = extend_schema_view(
+    list=extend_schema(
+        tags=["Admin Management"],
+        summary="List students",
+        description=(
+            "Returns a list of students belonging to the authenticated user's school.\n\n"
+            "Each student includes:\n"
+            "- Basic user information\n"
+            "- Current classroom assignment\n\n"
+            "**Permissions:** Principal / School Owner only."
+        ),
+        responses={
+            200: StudentListSerializer(many=True),
+        },
+    ),
+
+    retrieve=extend_schema(
+        tags=["Admin Management"],
+        summary="Retrieve student details",
+        description=(
+            "Retrieve detailed information about a single student.\n\n"
+            "Includes:\n"
+            "- Student bio data\n"
+            "- Current classroom\n"
+            "- Full enrollment history (session & term aware)\n\n"
+            "**Permissions:** Principal / School Owner only."
+        ),
+        responses={
+            200: StudentDetailSerializer,
+            404: OpenApiResponse(description="Student not found"),
+        },
+    ),
+
+    # 🔹 NEW ENDPOINT
+    current_classes=extend_schema(
+        tags=["Admin Management"],
+        summary="List students with current class",
+        description=(
+            "Returns all students in the authenticated user's school along with their "
+            "current academic class and classroom.\n\n"
+            "This endpoint is optimized for dashboards, dropdowns, promotion screens, "
+            "and subject assignment workflows.\n\n"
+            "**Permissions:** Principal / School Owner only."
+        ),
+        responses={
+            200: StudentCurrentClassSerializer(many=True),
+        },
+    ),
+
+    assign_subjects=extend_schema(
+        tags=["Admin Management"],
+        summary="Assign subjects to a student",
+        description=(
+            "Assign subjects to a student for a specific academic session and term.\n\n"
+            "### Important behavior\n"
+            "- This operation **REPLACES** all existing subject assignments\n"
+            "  for the selected session and term.\n"
+            "- Subjects must belong to the same school as the admin.\n"
+            "- Assignments are tracked with `assigned_by` for auditing.\n\n"
+            "**Permissions:** Principal / School Owner only."
+        ),
+        request=AdminAssignSubjectsToStudentSerializer,
+        responses={
+            200: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Subjects assigned successfully",
+                examples=[
+                    OpenApiExample(
+                        "Success response",
+                        value={
+                            "message": "Subjects assigned successfully",
+                            "student_id": "uuid",
+                            "count": 5,
+                        },
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(description="Validation error"),
+            404: OpenApiResponse(description="Student not found"),
+        },
+    ),
 )
 
 # -------------------------------------------------------
