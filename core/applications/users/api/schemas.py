@@ -6,7 +6,6 @@ from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import extend_schema_view
 from rest_framework import serializers
 
-
 from core.applications.users.api.serializers import serializers as user_serializers
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicSessionSerializer,
@@ -15,16 +14,7 @@ from core.applications.users.api.serializers.academic_section_serializers import
     AcademicTermSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
-    AdminAssignClassroomsSerializer,
-)
-from core.applications.users.api.serializers.academic_section_serializers import (
-    AdminAssignSubjectsSerializer,
-)
-from core.applications.users.api.serializers.academic_section_serializers import (
     SubjectSerializer,
-)
-from core.applications.users.api.serializers.academic_section_serializers import (
-    TeacherCreateTeachingAssignmentsSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherDetailSerializer,
@@ -34,9 +24,6 @@ from core.applications.users.api.serializers.academic_section_serializers import
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherListWithAssignmentsSerializer,
-)
-from core.applications.users.api.serializers.academic_section_serializers import (
-    TeacherReassignTeachingAssignmentSerializer,
 )
 from core.applications.users.api.serializers.admin_accessment_serializers import (
     AssessmentPolicyCreateSerializer,
@@ -1039,156 +1026,83 @@ TeacherViewSetSchema = extend_schema_view(
     # LIST TEACHERS
     # ============================================================
     list=extend_schema(
-        tags=["Teacher Management", "Admin Management"],
-        summary="List All Teachers (School Restricted)",
+        tags=["Admin Management"],
+        summary="List All Teachers (School Scoped)",
         description=(
-            "Returns a list of teachers belonging to the authenticated user's school.\n\n"
-            "Use this endpoint for:\n"
-            " - Admin viewing all teachers\n"
+            "Returns a paginated list of teachers belonging to the authenticated user's school.\n\n"
+            "**Use Cases:**\n"
+            " - Admin or principal viewing all teachers in their school\n"
             " - Filtering staff in a multi-tenant environment\n"
+            " - Supports search (by name, email, staff ID, department), ordering, and pagination\n\n"
+            "**Notes:**\n"
+            " - Only teachers within the authenticated user's school are returned.\n"
         ),
-        responses={200: TeacherListSerializer},
+        responses={200: TeacherListSerializer(many=True)},
     ),
+
     # ============================================================
     # RETRIEVE SINGLE TEACHER
     # ============================================================
     retrieve=extend_schema(
-        tags=["Teacher Management", "Admin Management"],
-        summary="Retrieve a Teacher Profile",
+        tags=["Admin Management"],
+        summary="Retrieve a Single Teacher Profile",
         description=(
             "Fetch detailed information about a single teacher, including:\n"
-            " - Personal + professional data\n"
+            " - Personal information (name, email)\n"
+            " - Professional information (staff ID, department, qualification)\n"
             " - Assigned classrooms\n"
             " - Assigned subjects\n\n"
-            "Only accessible within the school scope."
+            "**Access Control:**\n"
+            " - Only accessible within the teacher's school scope"
         ),
         responses={200: TeacherDetailSerializer},
     ),
-    # ============================================================
-    # ADMIN: ASSIGN CLASSROOMS
-    # ============================================================
-    assign_classrooms=extend_schema(
-        tags=["Admin Management"],
-        summary="Assign Classrooms to Teacher (Admin Only)",
-        description=(
-            "**ADMIN ACTION**\n\n"
-            "Assign one or multiple classrooms to a teacher.\n"
-            "This action *replaces all existing classroom assignments.*\n\n"
-            "Validations:\n"
-            " - Classroom IDs must exist\n"
-            " - All must belong to admin’s school\n"
-        ),
-        request=AdminAssignClassroomsSerializer,
-        responses={
-            200: TeacherDetailSerializer,
-            400: OpenApiResponse(description="Invalid classroom IDs"),
-            403: OpenApiResponse(description="Not allowed"),
-        },
-        examples=[
-            OpenApiExample(
-                "Assign Classrooms Example",
-                value={"classroom_ids": ["uuid-123", "uuid-456"]},
-            ),
-        ],
-    ),
-    # ============================================================
-    # ADMIN: ASSIGN SUBJECTS
-    # ============================================================
-    assign_subjects=extend_schema(
-        tags=["Admin Management"],
-        summary="Assign Subjects to Teacher (Admin Only)",
-        description=(
-            "**ADMIN ACTION**\n\n"
-            "Assign one or multiple subjects to a teacher.\n"
-            "This **fully replaces** previous subject assignments.\n\n"
-            "Validations:\n"
-            " - All subjects must exist\n"
-            " - Must belong to admin’s school"
-        ),
-        request=AdminAssignSubjectsSerializer,
-        responses={
-            200: TeacherDetailSerializer,
-            400: OpenApiResponse(description="Invalid subject IDs"),
-            403: OpenApiResponse(description="Not allowed"),
-        },
-    ),
-    # ============================================================
-    # TEACHER: BULK CREATE TEACHING ASSIGNMENTS
-    # ============================================================
-    assign_teaching=extend_schema(
-        tags=["Admin Management"],
-        summary="Teacher: Bulk Assign Classroom + Subject Combinations",
-        description=(
-            "**TEACHER ACTION**\n\n"
-            "Allows a teacher to assign themselves to multiple classes and subjects.\n"
-            "Useful for bulk creation of teaching roles.\n\n"
-            "Validations:\n"
-            " - Classroom + Subject must belong to teacher’s school\n"
-            " - Avoids creating duplicates using `get_or_create`\n"
-        ),
-        request=TeacherCreateTeachingAssignmentsSerializer,
-        responses={
-            200: OpenApiResponse(description="Assignments Created Successfully"),
-            403: OpenApiResponse(
-                description="Teacher cannot assign on behalf of others"
-            ),
-        },
-        examples=[
-            OpenApiExample(
-                "Bulk Teaching Assignment Example",
-                value={
-                    "assignments": [
-                        {"classroom": "uuid-101", "subject": "uuid-201"},
-                        {"classroom": "uuid-102", "subject": "uuid-202"},
-                    ]
-                },
-            )
-        ],
-    ),
-    # ============================================================
-    # TEACHER: UPDATE SINGLE TEACHING ASSIGNMENT
-    # ============================================================
-    reassign_teaching=extend_schema(
-        tags=["Admin Management"],
-        summary="Teacher: Update an Existing Teaching Assignment",
-        description=(
-            "**TEACHER ACTION**\n\n"
-            "Allows a teacher to modify one of their teaching assignments.\n"
-            "Teachers can change:\n"
-            " - classroom\n"
-            " - subject\n"
-            " - or both\n\n"
-            "Validations:\n"
-            " - New classroom/subject must be valid for school\n"
-            " - Duplicate combinations are prevented\n"
-        ),
-        request=TeacherReassignTeachingAssignmentSerializer,
-        responses={
-            200: OpenApiResponse(description="Assignment Updated Successfully"),
-            404: OpenApiResponse(description="Assignment Not Found"),
-            403: OpenApiResponse(
-                description="Cannot modify another teacher's assignment"
-            ),
-        },
-    ),
-    # ============================================================
-    # LIST TEACHERS WITH CLASSROOMS & SUBJECTS
 
+    # ============================================================
+    # LIST TEACHERS WITH ASSIGNMENTS
+    # ============================================================
     list_with_assignments=extend_schema(
         tags=["Admin Management"],
         summary="List Teachers with Assigned Classrooms and Subjects",
         description=(
-            "Returns all teachers in the authenticated user's school, including:\n"
-            " - Teacher personal info (name, email, staff ID)\n"
-            " - Classrooms assigned to each teacher\n"
-            " - Subjects assigned to each teacher\n\n"
-            "**Notes:**\n"
-            " - Only teachers within the admin/principal's school are returned\n"
-            " - Classroom and subject details are included as nested objects\n"
+            "Returns all teachers in the authenticated user's school along with their teaching assignments:\n"
+            " - Personal info (name, email, staff ID)\n"
+            " - Classrooms assigned\n"
+            " - Subjects assigned\n\n"
+            "**Features:**\n"
+            " - Supports pagination, filtering, and ordering\n"
+            " - Useful for admin dashboards or reporting\n"
+            " - Nested classroom and subject objects provide full assignment context\n"
         ),
         responses={200: TeacherListWithAssignmentsSerializer(many=True)},
     ),
 
+    # ============================================================
+    # ASSIGN CLASSROOMS AND SUBJECTS
+    # ============================================================
+    assign_classrooms_subjects=extend_schema(
+        tags=["Admin Management"],
+        summary="Assign Classrooms and Subjects to a Teacher",
+        description=(
+            "Admin-only endpoint to assign classrooms and subjects to a specific teacher.\n\n"
+            "**Behavior:**\n"
+            " - Replaces the teacher's current classrooms and subjects with the provided lists\n"
+            " - Updates `TeachingAssignment` objects automatically\n"
+            " - Fully transactional: changes are applied atomically\n"
+            " - Handles duplicates and ensures database constraints (`unique_together`) are not violated\n\n"
+            "**Request Body:**\n"
+            " - `classroom_ids`: List of classroom UUIDs\n"
+            " - `subject_ids`: List of subject UUIDs\n\n"
+            "**Notes:**\n"
+            " - Only classrooms and subjects belonging to the authenticated user's school are allowed\n"
+            " - Duplicate entries in `subject_ids` or `classroom_ids` are rejected\n"
+        ),
+        responses={
+            200: TeacherDetailSerializer,
+            400: "Validation errors for invalid classrooms, subjects, or duplicates",
+            403: "Forbidden if the user is not an admin/principal"
+        }
+    ),
 )
 
 GRADING_SCHEMA = extend_schema_view(

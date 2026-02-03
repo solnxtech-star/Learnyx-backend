@@ -1,3 +1,4 @@
+from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters
 from rest_framework import status
@@ -9,23 +10,18 @@ from rest_framework.response import Response
 from core.applications.academics.models import AcademicSession
 from core.applications.academics.models import AcademicTerm
 from core.applications.academics.models import Subject
-from core.applications.academics.models import TeachingAssignment
 from core.applications.users.api.schemas import ACADEMIC_SESSION_SCHEMA
 from core.applications.users.api.schemas import ACADEMIC_TERM_SCHEMA
 from core.applications.users.api.schemas import SUBJECT_SCHEMA
 from core.applications.users.api.schemas import TeacherViewSetSchema
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicSessionSerializer,
-    TeacherListWithAssignmentsSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicTermSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
-    AdminAssignClassroomsSerializer,
-)
-from core.applications.users.api.serializers.academic_section_serializers import (
-    AdminAssignSubjectsSerializer,
+    AdminAssignClassroomsAndSubjectsSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     CloseAcademicSessionSerializer,
@@ -37,16 +33,13 @@ from core.applications.users.api.serializers.academic_section_serializers import
     SubjectSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
-    TeacherCreateTeachingAssignmentsSerializer,
-)
-from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherDetailSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherListSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
-    TeacherReassignTeachingAssignmentSerializer,
+    TeacherListWithAssignmentsSerializer,
 )
 from core.applications.users.models import TeacherProfile
 from core.applications.users.permissions import IsPrincipalOrSchoolOwner
@@ -237,192 +230,109 @@ class TeacherViewSet(viewsets.ModelViewSet):
     """
     Teacher Management ViewSet.
 
-    Provides:
-    - List teachers
-    - Retrieve teacher info
-    - Admin assigns classrooms
-    - Admin assigns subjects
-    - Teachers create multiple teaching assignments
-    - Teachers update an existing assignment
+    Responsibilities:
+        - List teachers (lightweight)
+        - Retrieve teacher info (detailed with assignments)
+        - Admin assigns classrooms and subjects
+        - Teachers create/update teaching assignments
 
     Multi-Tenancy:
-    Restricts all returned teachers to the authenticated user's school.
+        Restricts all returned teachers to the authenticated user's school.
     """
-
     queryset = TeacherProfile.objects.select_related("user")
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsPrincipalOrSchoolOwner]
+    # pagination_class = StandardResultsSetPagination
 
-    # ---------------------------------------------------------
-    # Dynamic serializer selection
-    # ---------------------------------------------------------
+    # Enable search, filter, and ordering
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["user__name", "user__email", "staff_id", "department"]
+    ordering_fields = ["user__name", "staff_id", "department"]
+    ordering = ["user__name"]
+
+    # ------------------------------
+    # Serializer selection per action
+    # ------------------------------
     def get_serializer_class(self):
-        """
-        Pick serializer based on action.
-        """
-        action_map = {
+        action_serializers = {
             "list": TeacherListSerializer,
             "retrieve": TeacherDetailSerializer,
-            "assign_classrooms": AdminAssignClassroomsSerializer,
-            "assign_subjects": AdminAssignSubjectsSerializer,
-            "assign_teaching": TeacherCreateTeachingAssignmentsSerializer,
-            "reassign_teaching": TeacherReassignTeachingAssignmentSerializer,
+            "list_with_assignments": TeacherListWithAssignmentsSerializer,
+            "assign_classrooms_subjects": AdminAssignClassroomsAndSubjectsSerializer,
         }
-        return action_map.get(self.action, TeacherDetailSerializer)
+        return action_serializers.get(self.action, TeacherDetailSerializer)
 
-    # ---------------------------------------------------------
-    # Queryset with multi-tenancy scoping
-    # ---------------------------------------------------------
+    # ------------------------------
+    # Scoped queryset for multi-tenancy
+    # ------------------------------
     def get_queryset(self):
         """
-        Only return teachers belonging to the logged-in user's school.
+        Limit all teacher queries to the authenticated user's school.
+        Prefetch related classrooms and subjects for efficiency.
         """
         school = self.request.user.school
         return (
             TeacherProfile.objects.filter(user__school=school)
             .select_related("user")
-            .prefetch_related("classrooms", "subjects")
+            .prefetch_related(
+                "teaching_assignments__classroom",
+                "teaching_assignments__subject",
+                "classrooms",
+                "subjects",
+            )
         )
 
-    # =========================================================
-    # ADMIN → Assign Classrooms
-    # =========================================================
+    # ------------------------------
+    # Admin-only: Assign Classrooms & Subjects
+    # ------------------------------
     @action(
         methods=["POST"],
         detail=True,
-        url_path="assign-classrooms",
+        url_path="assign-classrooms-subjects",
         permission_classes=[IsAuthenticated, IsPrincipalOrSchoolOwner],
     )
-    def assign_classrooms(self, request, pk=None):
+    def assign_classrooms_subjects(self, request, pk=None):
         """
-        Admin assigns classrooms to a teacher.
-        This replaces all their current classrooms.
+        Admin endpoint to assign classrooms and subjects to a teacher.
+        Fully transactional, handles duplicates, and updates TeachingAssignments.
         """
         teacher = self.get_object()
 
-        serializer = AdminAssignClassroomsSerializer(
-            data=request.data, context={"request": request}
-        )
-        serializer.is_valid(raise_exception=True)
-        serializer.save(teacher_profile=teacher)
-
-        return Response(
-            {
-                "message": "Classrooms assigned successfully.",
-                "teacher": TeacherDetailSerializer(teacher).data,
-            }
-        )
-
-    # =========================================================
-    # ADMIN → Assign Subjects
-    # =========================================================
-    @action(
-        methods=["POST"],
-        detail=True,
-        url_path="assign-subjects",
-        permission_classes=[IsAuthenticated, IsPrincipalOrSchoolOwner],
-    )
-    def assign_subjects(self, request, pk=None):
-        """
-        Admin assigns subjects to a teacher.
-        """
-        teacher = self.get_object()
-
-        serializer = AdminAssignSubjectsSerializer(
-            data=request.data, context={"request": request}
-        )
-        serializer.is_valid(raise_exception=True)
-        serializer.save(teacher_profile=teacher)
-
-        return Response(
-            {
-                "message": "Subjects assigned successfully.",
-                "teacher": TeacherDetailSerializer(teacher).data,
-            }
-        )
-
-    # =========================================================
-    # TEACHER → Bulk Create Assignments
-    # =========================================================
-    @action(
-        methods=["POST"],
-        detail=True,
-        url_path="assign-teaching",
-        permission_classes=[IsAuthenticated, IsPrincipalOrSchoolOwner],
-    )
-    def assign_teaching(self, request, pk=None):
-        """
-        Admin assigns multiple classroom+subject combinations to a teacher.
-        """
-        teacher = self.get_object()
-
-        if request.user != teacher.user:
-            return Response(
-                {"detail": "You cannot assign teaching for another teacher."},
-                status=403,
-            )
-
-        serializer = TeacherCreateTeachingAssignmentsSerializer(
-            data=request.data, context={"teacher": teacher}
-        )
-        serializer.is_valid(raise_exception=True)
-        assignments = serializer.save()
-
-        return Response(
-            {
-                "message": "Teaching assignments created.",
-                "count": len(assignments),
-            }
-        )
-
-    # =========================================================
-    # TEACHER → Reassign a Single Teaching Combination
-    # =========================================================
-    @action(
-        methods=["PATCH"],
-        detail=True,
-        url_path="reassign-teaching/(?P<assignment_id>[^/.]+)",
-        permission_classes=[IsAuthenticated, IsPrincipalOrSchoolOwner],
-    )
-    def reassign_teaching(self, request, pk=None, assignment_id=None):
-        """
-        Teacher updates one of their existing teaching assignments.
-        """
-        teacher = self.get_object()
-
-        if request.user != teacher.user:
-            return Response(
-                {"detail": "You cannot modify teaching for another teacher."},
-                status=403,
-            )
-
-        try:
-            assignment = TeachingAssignment.objects.get(
-                id=assignment_id, teacher=teacher
-            )
-        except TeachingAssignment.DoesNotExist:
-            return Response({"detail": "Teaching assignment not found."}, status=404)
-
-        serializer = TeacherReassignTeachingAssignmentSerializer(
-            data=request.data, context={"teacher": teacher, "assignment": assignment}
+        serializer = AdminAssignClassroomsAndSubjectsSerializer(
+            data=request.data,
+            context={"request": request, "teacher": teacher}
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
 
-        return Response({"message": "Teaching assignment updated."})
+        return Response({
+            "message": "Classrooms and subjects assigned successfully.",
+            "teacher": TeacherDetailSerializer(teacher, context={"request": request}).data,
+        }, status=200)
 
+    # ------------------------------
+    # List teachers with teaching assignments (Admin)
+    # ------------------------------
     @action(
         methods=["GET"],
-        detail=False,  # Not detail=True, because it's a list of all teachers
+        detail=False,
         url_path="list-with-assignments",
         permission_classes=[IsAuthenticated, IsPrincipalOrSchoolOwner],
     )
     def list_with_assignments(self, request):
         """
-        List all teachers in the school with classrooms and subjects assigned.
+        Returns all teachers in the school with their classrooms and subjects.
+        Supports search, filter, ordering, and pagination.
         """
-        school = request.user.school
-        teachers = TeacherProfile.objects.filter(user__school=school).prefetch_related(
-            "classrooms", "subjects",
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+
+        serializer = TeacherListWithAssignmentsSerializer(
+            page or queryset,
+            many=True,
+            context={"request": request}
         )
-        serializer = TeacherListWithAssignmentsSerializer(teachers, many=True)
-        return Response(serializer.data)
+
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+
+        return Response(serializer.data, status=200)

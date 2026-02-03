@@ -467,9 +467,6 @@ class TeacherListSerializer(serializers.ModelSerializer):
         - Returns a summarized teacher record.
         - Used in admin/management teacher listing page.
 
-    Returned By Endpoint:
-        GET /teachers/
-
     Includes:
         - Email (from related User model)
         - Qualification
@@ -477,7 +474,6 @@ class TeacherListSerializer(serializers.ModelSerializer):
         - Department
         - Staff ID
     """
-
     email = serializers.EmailField(source="user.email")
 
     class Meta:
@@ -498,18 +494,11 @@ class TeacherDetailSerializer(serializers.ModelSerializer):
 
     Purpose:
         - Exposes public teacher information.
-        - Includes assigned classrooms in a safe JSON format.
-
-    Returned By Endpoint:
-        GET /teachers/<id>/
-
-    Notes:
-        This serializer avoids returning raw Django model instances
-        to prevent JSON serialization errors.
+        - Includes assigned classrooms and subjects in a structured JSON format.
     """
 
     email = serializers.EmailField(source="user.email", read_only=True)
-    classrooms = serializers.SerializerMethodField(read_only=True)
+    teaching_assignments = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = TeacherProfile
@@ -520,16 +509,17 @@ class TeacherDetailSerializer(serializers.ModelSerializer):
             "specialization",
             "department",
             "staff_id",
-            "classrooms",
+            "teaching_assignments",
         ]
 
-    def get_classrooms(self, obj):
+    def get_teaching_assignments(self, obj):
         """
-        Return a structured list of assigned classrooms.
+        Return a structured list of classroom + subject assignments.
 
-        Response example:
-            [
-                {
+        Example Response:
+        [
+            {
+                "classroom": {
                     "id": "uuid",
                     "name": "JSS1A",
                     "level": "JSS1",
@@ -538,257 +528,157 @@ class TeacherDetailSerializer(serializers.ModelSerializer):
                         "id": "uuid",
                         "name": "Greenfield Academy"
                     }
+                },
+                "subject": {
+                    "id": "uuid",
+                    "name": "Mathematics",
+                    "code": "MATH101",
+                    "school": {
+                        "id": "uuid",
+                        "name": "Greenfield Academy"
+                    }
                 }
-            ]
+            },
+            ...
+        ]
         """
+        assignments = TeachingAssignment.objects.filter(teacher=obj).select_related(
+            "classroom__school", "subject__school"
+        )
 
         return [
             {
-                "id": str(c.id),
-                "name": f"{c.academic_class}{c.arm}",
-                "level": c.academic_class,
-                "arm": c.arm,
-                "school": {
-                    "id": str(c.school.id),
-                    "name": c.school.name,
+                "classroom": {
+                    "id": str(a.classroom.id),
+                    "name": f"{a.classroom.academic_class}{a.classroom.arm}",
+                    "level": a.classroom.academic_class,
+                    "arm": a.classroom.arm,
+                    "school": {
+                        "id": str(a.classroom.school.id),
+                        "name": a.classroom.school.name,
+                    },
+                },
+                "subject": {
+                    "id": str(a.subject.id),
+                    "name": a.subject.name,
+                    "code": getattr(a.subject, "code", None),
+                    "school": {
+                        "id": str(a.subject.school.id),
+                        "name": a.subject.school.name,
+                    },
                 },
             }
-            for c in obj.classrooms.all()
+            for a in assignments
         ]
-
-
-class AdminAssignClassroomsSerializer(serializers.Serializer):
+class AdminAssignClassroomsAndSubjectsSerializer(serializers.Serializer):
     """
-    Serializer for admin-only endpoint:
-    Assign multiple classrooms to a teacher.
+    Admin-only serializer to assign classrooms and subjects to a teacher.
 
-    Purpose:
-        - Admin can replace all existing classroom assignments at once.
-        - Only classrooms belonging to the admin's school are allowed.
-
-    Expected Input:
-        {
-            "classroom_ids": ["uuid1", "uuid2"]
-        }
+    Behavior:
+        - Replaces teacher's classrooms and subjects with the provided lists.
+        - Updates TeachingAssignments accordingly.
+        - Ensures no duplicates or database constraint violations.
+        - Fully transactional.
     """
 
     classroom_ids = serializers.ListField(
         child=serializers.CharField(),
         allow_empty=False,
-        help_text="List of classroom UUIDs to assign to the teacher.",
+        help_text="List of classroom UUIDs to assign to the teacher."
     )
-
-    def validate_classroom_ids(self, ids):
-        """
-        Validate that all classroom IDs exist and belong to the admin's school.
-        """
-        request = self.context["request"]
-        school = request.user.school
-
-        classrooms = ClassRoom.objects.filter(id__in=ids, school=school)
-
-        if classrooms.count() != len(ids):
-            raise serializers.ValidationError(
-                "Some classrooms do not exist or do not belong to your school.",
-            )
-
-        return ids
-
-    def save(self, teacher_profile):
-        """
-        Assign validated classrooms to the teacher.
-
-        Behavior:
-            - Replaces existing classroom assignments.
-        """
-        ids = self.validated_data["classroom_ids"]
-        teacher_profile.classrooms.set(ids)
-        teacher_profile.save()
-        return teacher_profile
-
-
-class TeacherCreateTeachingAssignmentsSerializer(serializers.Serializer):
-    """
-    Allows a teacher to assign themselves to teach subjects
-    in different classrooms.
-
-    Supports:
-        - Bulk assignment creation
-        - Duplicate prevention (via get_or_create)
-
-    Expected Input:
-        {
-            "assignments": [
-                {"classroom": UUID, "subject": UUID},
-                ...
-            ]
-        }
-    """
-
-    assignments = serializers.ListField(
-        child=serializers.DictField(),
-        allow_empty=False,
-        help_text="List of classroom+subject assignment objects.",
-    )
-
-    def validate_assignments(self, items):
-        """
-        Validate that:
-            - Each item has classroom + subject
-            - Both belong to teacher's school
-        """
-        teacher = self.context["teacher"]
-        school = teacher.user.school
-
-        for item in items:
-            classroom_id = item.get("classroom")
-            subject_id = item.get("subject")
-
-            if not classroom_id or not subject_id:
-                raise serializers.ValidationError(
-                    "Each assignment requires 'classroom' and 'subject'.",
-                )
-
-            if not ClassRoom.objects.filter(id=classroom_id, school=school).exists():
-                raise serializers.ValidationError(
-                    f"Invalid classroom {classroom_id} for this teacher.",
-                )
-
-            if not Subject.objects.filter(id=subject_id, school=school).exists():
-                raise serializers.ValidationError(
-                    f"Invalid subject {subject_id} for this teacher.",
-                )
-
-        return items
-
-    def save(self):
-        """
-        Create teaching assignments.
-        Uses get_or_create to avoid duplicates.
-        """
-        teacher = self.context["teacher"]
-        created_assignments = []
-
-        for item in self.validated_data["assignments"]:
-            assignment, _ = TeachingAssignment.objects.get_or_create(
-                teacher=teacher,
-                classroom_id=item["classroom"],
-                subject_id=item["subject"],
-            )
-            created_assignments.append(assignment)
-
-        return created_assignments
-
-
-class TeacherReassignTeachingAssignmentSerializer(serializers.Serializer):
-    """
-    Serializer for updating an existing teaching assignment.
-
-    Editable Fields:
-        - classroom (optional)
-        - subject (optional)
-
-    Validates:
-        - New classroom/subject belong to teacher's school
-        - No duplicate combination exists
-    """
-
-    classroom = serializers.UUIDField(required=False)
-    subject = serializers.UUIDField(required=False)
-
-    def validate(self, attrs):
-        """
-        Validate updated classroom/subject:
-            - Must belong to school
-            - Cannot duplicate an existing assignment
-        """
-        teacher = self.context["teacher"]
-        assignment = self.context["assignment"]
-        school = teacher.user.school
-
-        new_classroom = attrs.get("classroom", assignment.classroom_id)
-        new_subject = attrs.get("subject", assignment.subject_id)
-
-        # Validate ownership
-        if not ClassRoom.objects.filter(id=new_classroom, school=school).exists():
-            raise serializers.ValidationError("Invalid classroom.")
-
-        if not Subject.objects.filter(id=new_subject, school=school).exists():
-            raise serializers.ValidationError("Invalid subject.")
-
-        # Duplicate prevention
-        if (
-            TeachingAssignment.objects.filter(
-                teacher=teacher,
-                classroom_id=new_classroom,
-                subject_id=new_subject,
-            )
-            .exclude(id=assignment.id)
-            .exists()
-        ):
-            raise serializers.ValidationError(
-                "Another assignment with this classroom+subject already exists.",
-            )
-
-        attrs["new_classroom"] = new_classroom
-        attrs["new_subject"] = new_subject
-        return attrs
-
-    def save(self):
-        """
-        Apply reassignment update to the TeachingAssignment instance.
-        """
-        assignment = self.context["assignment"]
-        assignment.classroom_id = self.validated_data["new_classroom"]
-        assignment.subject_id = self.validated_data["new_subject"]
-        assignment.save()
-        return assignment
-
-
-class AdminAssignSubjectsSerializer(serializers.Serializer):
-    """
-    Admin-only serializer for assigning subjects to teachers.
-
-    Purpose:
-        - Admin can assign one or many subjects.
-        - Old subject assignments are replaced entirely.
-
-    Expected Input:
-        {
-            "subject_ids": ["uuid1", "uuid2"]
-        }
-    """
-
     subject_ids = serializers.ListField(
         child=serializers.CharField(),
         allow_empty=False,
-        help_text="List of subject UUIDs to assign to the teacher.",
+        help_text="List of subject UUIDs to assign to the teacher."
     )
 
-    def validate_subject_ids(self, subject_ids):
-        """
-        Validate that all provided subject IDs exist and
-        belong to the admin's school.
-        """
-        request = self.context["request"]
-        school = request.user.school
+    def validate_classroom_ids(self, ids):
+        school = self.context["request"].user.school
 
-        subjects = Subject.objects.filter(id__in=subject_ids, school=school)
+        valid_classrooms = set(
+            ClassRoom.objects.filter(id__in=ids, school=school)
+            .values_list("id", flat=True)
+        )
 
-        if subjects.count() != len(subject_ids):
+        if set(ids) != valid_classrooms:
             raise serializers.ValidationError(
-                "Some subjects do not exist or do not belong to your school.",
+                "Some classrooms do not exist or do not belong to your school."
             )
-        return subject_ids
 
-    def save(self, teacher_profile):
+        return list(valid_classrooms)
+
+    def validate_subject_ids(self, ids):
+        school = self.context["request"].user.school
+
+        valid_subjects = set(
+            Subject.objects.filter(id__in=ids, school=school)
+            .values_list("id", flat=True)
+        )
+
+        if set(ids) != valid_subjects:
+            raise serializers.ValidationError(
+                "Some subjects do not exist or do not belong to your school."
+            )
+
+        # Remove duplicates in input
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError("Duplicate subjects in input.")
+
+        return list(valid_subjects)
+
+    @transaction.atomic
+    def save(self):
         """
-        Apply subject assignment:
-            - Replace existing subjects.
+        Assign classrooms and subjects to the teacher and update TeachingAssignments.
+
+        Steps:
+            1. Update teacher's classrooms and subjects M2M fields.
+            2. Delete any TeachingAssignments outside the new classrooms or subjects.
+            3. Create missing TeachingAssignments for every classroom + subject combination.
         """
-        teacher_profile.subjects.set(self.validated_data["subject_ids"])
-        teacher_profile.save()
-        return teacher_profile
+        teacher = self.context["teacher"]
+        classroom_ids = self.validated_data["classroom_ids"]
+        subject_ids = self.validated_data["subject_ids"]
+
+        # Update teacher classrooms and subjects
+        teacher.classrooms.set(classroom_ids)
+        teacher.subjects.set(subject_ids)
+        teacher.save()
+
+        # Remove TeachingAssignments outside the new set
+        TeachingAssignment.objects.filter(teacher=teacher).exclude(
+            classroom_id__in=classroom_ids,
+            subject_id__in=subject_ids
+        ).delete()
+
+        # Determine all desired combinations
+        desired_combinations = {
+            (str(classroom_id), str(subject_id))
+            for classroom_id in classroom_ids
+            for subject_id in subject_ids
+        }
+
+        # Determine existing combinations
+        existing_combinations = set(
+            TeachingAssignment.objects.filter(teacher=teacher)
+            .values_list("classroom_id", "subject_id")
+        )
+
+        # Create only missing assignments
+        to_create = desired_combinations - existing_combinations
+        assignments = [
+            TeachingAssignment(
+                teacher=teacher,
+                classroom_id=classroom_id,
+                subject_id=subject_id
+            )
+            for classroom_id, subject_id in to_create
+        ]
+        TeachingAssignment.objects.bulk_create(assignments)
+
+        return teacher
+
+
 
 
 class ClassroomSerializer(serializers.ModelSerializer):
@@ -798,11 +688,21 @@ class ClassroomSerializer(serializers.ModelSerializer):
 
 
 
+class TeachingAssignmentNestedSerializer(serializers.ModelSerializer):
+    classroom = serializers.CharField(source="classroom.name")
+    subject = serializers.CharField(source="subject.name")
+
+    class Meta:
+        model = TeachingAssignment
+        fields = ["classroom", "subject"]
+
+
 class TeacherListWithAssignmentsSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source="user.name")
     user_email = serializers.EmailField(source="user.email")
-    classrooms = ClassroomSerializer(many=True, read_only=True)
-    subjects = SubjectSerializer(many=True, read_only=True)
+    assignments = TeachingAssignmentNestedSerializer(
+        source="teaching_assignments", many=True, read_only=True
+    )
 
     class Meta:
         model = TeacherProfile
@@ -811,6 +711,5 @@ class TeacherListWithAssignmentsSerializer(serializers.ModelSerializer):
             "user_name",
             "user_email",
             "staff_id",
-            "classrooms",
-            "subjects",
+            "assignments",  # replaces classrooms + subjects
         ]
