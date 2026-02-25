@@ -8,6 +8,7 @@ from core.applications.academics.models import AssessmentRecord
 from core.applications.academics.models import AssessmentType
 from core.applications.academics.models import ClassRoom
 from core.applications.academics.models import ClassSchedule
+from core.applications.academics.models import StudentClassAssignment
 from core.applications.academics.models import StudentSubjectEnrollment
 from core.applications.academics.models import Subject
 from core.applications.academics.models import TeachingAssignment
@@ -25,10 +26,10 @@ class AcademicSessionAdmin(admin.ModelAdmin):
 
 @admin.register(AcademicTerm)
 class AcademicTermAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "session", "is_active", "term_type")
+    list_display = ("id", "session", "is_active", "term_type")
     list_filter = ("is_active", "term_type")
-    search_fields = ("name", "session__name")
-    ordering = ("name",)
+    search_fields = ("session__name",)
+    ordering = ("session__name",)
 
 
 @admin.register(AssessmentPolicy)
@@ -149,3 +150,12 @@ class StudentSubjectEnrollmentAdmin(admin.ModelAdmin):
         "student__user__name",
         "subject__name",
     )
+
+@admin.register(StudentClassAssignment)
+class StudentClassAssignmentAdmin(admin.ModelAdmin):
+    list_display = (
+        "id", "student", "classroom",
+        "academic_session", "academic_term", "is_active"
+    )
+    # list_filter = ("classroom", "academic_session", "academic_term", "is_active")
+    # ordering = ("academic_session", "academic_term")

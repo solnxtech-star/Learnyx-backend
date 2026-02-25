@@ -4,7 +4,9 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
+from core.applications.academics.models import AcademicSession
 from core.applications.academics.models import ClassRoom
+from core.applications.academics.models import StudentClassAssignment
 from core.applications.users.models import AdminProfile
 from core.applications.users.models import StudentProfile
 from core.applications.users.models import TeacherProfile
@@ -180,10 +182,11 @@ class UserActivationSerializer(serializers.Serializer):
 
 class ClassRoomCreateSerializer(serializers.ModelSerializer):
     """
-    Serializer used for creating and updating classrooms.
+    Serializer for creating and updating classrooms.
 
     - School is auto-assigned from the authenticated admin.
-    - Academic track (Science / Arts / Commercial) is selected explicitly.
+    - Academic track (Science / Arts / Commercial) is explicitly selected.
+    - Optional form_teacher can be assigned.
     """
 
     academic_class = serializers.ChoiceField(
@@ -195,9 +198,16 @@ class ClassRoomCreateSerializer(serializers.ModelSerializer):
         help_text="Academic track for the classroom (Science, Arts, Commercial)",
     )
 
+    form_teacher = serializers.PrimaryKeyRelatedField(
+        queryset=TeacherProfile.objects.all(),
+        required=False,
+        allow_null=True,
+        help_text="Optional: Assign a teacher as the form teacher",
+    )
+
     class Meta:
         model = ClassRoom
-        fields = ["id", "academic_class", "arm", "track"]
+        fields = ["id", "academic_class", "arm", "track", "form_teacher"]
         extra_kwargs = {
             "arm": {"required": True},
             "track": {"required": True},
@@ -208,19 +218,45 @@ class ClassRoomCreateSerializer(serializers.ModelSerializer):
         school = getattr(request.user, "school", None)
 
         if not school:
-            error_message = _("User does not belong to any school.")
-            raise serializers.ValidationError(error_message)
-
-        # Enforce school-level uniqueness (academic_class + arm + track)
-        if ClassRoom.objects.filter(
-            school=school,
-            academic_class=attrs["academic_class"],
-            arm=attrs["arm"],
-            track=attrs["track"],
-        ).exists():
-            msg = f"{attrs['academic_class']} {attrs['arm']} ({attrs['track']}) already exists."  # noqa: E501
             raise serializers.ValidationError(
-                msg,
+                _("User does not belong to any school.")
+            )
+
+        # For updates, include existing instance values
+        academic_class = attrs.get(
+            "academic_class",
+            getattr(self.instance, "academic_class", None),
+        )
+        arm = attrs.get(
+            "arm",
+            getattr(self.instance, "arm", None),
+        )
+        track = attrs.get(
+            "track",
+            getattr(self.instance, "track", None),
+        )
+
+        # Enforce school-level uniqueness (exclude self on update)
+        queryset = ClassRoom.objects.filter(
+            school=school,
+            academic_class=academic_class,
+            arm=arm,
+            track=track,
+        )
+
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError(
+                f"{academic_class} {arm} ({track}) already exists."
+            )
+
+        # Validate form_teacher belongs to same school
+        form_teacher = attrs.get("form_teacher")
+        if form_teacher and form_teacher.user.school != school:
+            raise serializers.ValidationError(
+                _("Form teacher must belong to the same school.")
             )
 
         return attrs
@@ -232,11 +268,21 @@ class ClassRoomCreateSerializer(serializers.ModelSerializer):
             **validated_data,
         )
 
+    def update(self, instance, validated_data):
+        """
+        Explicit update for clarity and control.
+        """
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        instance.save()
+        return instance
 
 
 class ClassRoomSerializer(serializers.ModelSerializer):
     """
     Read serializer for listing and retrieving classrooms.
+    Includes counts for subjects and students based on active assignments.
     """
 
     class_display = serializers.CharField(
@@ -249,6 +295,15 @@ class ClassRoomSerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
+    total_subjects = serializers.SerializerMethodField()
+    total_students = serializers.SerializerMethodField()
+
+    # Optional: show form_teacher info
+    form_teacher_name = serializers.CharField(
+        source="form_teacher.user.name",
+        read_only=True,
+    )
+
     class Meta:
         model = ClassRoom
         fields = [
@@ -258,6 +313,36 @@ class ClassRoomSerializer(serializers.ModelSerializer):
             "arm",
             "track",
             "track_display",
+            "form_teacher_name",
+            "total_subjects",
+            "total_students",
             "created_at",
             "updated_at",
         ]
+
+    def get_total_subjects(self, obj):
+        """
+        Returns the total number of active subjects assigned to this classroom.
+        """
+        return obj.subjects.filter(is_active=True).count()
+
+    def get_total_students(self, obj):
+        """
+        Returns the total number of students currently assigned to this classroom
+        for the active academic session.
+        """
+
+        # Get active session for this school
+        active_session = AcademicSession.objects.filter(
+            school=obj.school, is_active=True,
+        ).first()
+
+        if not active_session:
+            return 0
+
+        # Count active assignments for this classroom in the active session
+        return StudentClassAssignment.objects.filter(
+            classroom=obj,
+            academic_session=active_session,
+            is_active=True,
+        ).count()

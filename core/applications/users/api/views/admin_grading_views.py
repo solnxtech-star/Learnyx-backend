@@ -249,8 +249,8 @@ class ClassRoomViewSet(ModelViewSet):
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
 
     # Filtering & querying
-    filterset_fields = ["academic_class", "track"]
-    search_fields = ["arm", "academic_class", "track"]
+    filterset_fields = ["academic_class", "track", "form_teacher"]
+    search_fields = ["arm", "academic_class", "track", "form_teacher__user__name"]
     ordering_fields = ["academic_class", "track", "arm", "created"]
     ordering = ["academic_class", "track", "arm"]
 

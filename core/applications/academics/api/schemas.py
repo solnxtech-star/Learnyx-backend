@@ -21,6 +21,9 @@ from core.applications.academics.api.serializers.teachers_dashboard_serializers 
     AssessmentEntrySerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    AssessmentTypeSerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     ClassroomStudentSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
@@ -33,6 +36,9 @@ from core.applications.academics.api.serializers.teachers_dashboard_serializers 
     StudentProfileDetailSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    StudentSubjectMatchSerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     StudentSubjectResultSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
@@ -40,6 +46,9 @@ from core.applications.academics.api.serializers.teachers_dashboard_serializers 
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     TeacherClassroomSerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    TeacherSubjectSerializer,
 )
 
 STUDENT_VIEWSET_SCHEMA = extend_schema_view(
@@ -375,6 +384,57 @@ teachers_dashboard = extend_schema_view(
     ),
 
     # =====================================================
+    # STEP 3A — Teacher Subjects (NEW)
+    # =====================================================
+    list_teacher_subjects=extend_schema(
+        summary="List subjects taught by the logged-in teacher",
+        description=(
+            "STEP 3A: Fetch subjects the teacher is authorized to teach.\n\n"
+            "This endpoint is derived from TeachingAssignment and returns "
+            "subjects scoped by classroom.\n\n"
+            "**Frontend flow:**\n"
+            "1. Call this before assessment entry.\n"
+            "2. Populate subject dropdowns per classroom.\n"
+            "3. Prevent teachers from selecting unauthorized subjects.\n\n"
+            "**Notes:**\n"
+            "- Each subject is tied to a classroom.\n"
+            "- Only active subjects are returned."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="classroom",
+                description="Optional classroom filter",
+                required=False,
+                location=OpenApiParameter.QUERY,
+            ),
+        ],
+        responses={200: TeacherSubjectSerializer(many=True)},
+        tags=["Teacher Dashboard"],
+    ),
+
+    # =====================================================
+    # STEP 3B — Assessment Types (NEW)
+    # =====================================================
+    list_assessment_types=extend_schema(
+        summary="List assessment types for the active academic term",
+        description=(
+            "STEP 3B: Fetch assessment types configured for the active academic term.\n\n"
+            "Assessment types are policy-driven and define:\n"
+            "- Allowed assessment categories (CA, Exam, Project, etc.)\n"
+            "- Score limits\n"
+            "- Weighting rules\n\n"
+            "**Frontend flow:**\n"
+            "1. Call this before submitting assessment entries.\n"
+            "2. Populate assessment type selector.\n"
+            "3. Use `max_score` and `count` for client-side hints.\n\n"
+            "**Important:**\n"
+            "All enforcement is still validated server-side."
+        ),
+        responses={200: AssessmentTypeSerializer(many=True)},
+        tags=["Teacher Dashboard"],
+    ),
+
+    # =====================================================
     # STEP 4 — Raw Assessment Entries
     # =====================================================
     student_assessments=extend_schema(
@@ -514,6 +574,24 @@ teachers_dashboard = extend_schema_view(
             ),
         ],
         responses={200: ResultSnapshotSerializer(many=True)},
+        tags=["Teacher Dashboard"],
+    ),
+
+    # =====================================================
+    # STEP 9 — Students in teacher's classrooms by subjects
+    # =====================================================
+    students_by_subject=extend_schema(
+        summary="List students in teacher-assigned classrooms matching teacher subjects",
+        description=(
+            "STEP 9: Fetch all students who are in classrooms assigned to the logged-in teacher "
+            "and are enrolled in at least one subject that the teacher teaches.\n\n"
+            "**Frontend flow:**\n"
+            "1. Call this endpoint to populate student lists filtered by subject.\n"
+            "2. Use for assessment entry or subject-specific dashboards.\n"
+            "3. Returns matched subjects per student for display.\n\n"
+            "**Permissions:** Teacher must be assigned to the classroom and subject."
+        ),
+        responses={200: StudentSubjectMatchSerializer(many=True)},
         tags=["Teacher Dashboard"],
     ),
 )

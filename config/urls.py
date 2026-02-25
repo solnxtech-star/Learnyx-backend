@@ -52,6 +52,10 @@ urlpatterns += [
         "api/academics/",
         include("core.applications.academics.api.routers", namespace="academics"),
     ),
+    path(
+        "api/grading/",
+        include("core.applications.grading.api.routers", namespace="grading"),
+    ),
     # DRF auth token
     path("api/auth-token/", obtain_auth_token, name="obtain_auth_token"),
     path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),

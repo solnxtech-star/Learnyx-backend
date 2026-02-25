@@ -10,6 +10,7 @@ from core.helper.enums import AcademicTrack
 from core.helper.enums import DayOfWeek
 from core.helper.enums import UserRole
 from core.helper.models import TimeStampedModel
+from django.utils import timezone
 
 # Create your models here.
 
@@ -24,6 +25,17 @@ class AcademicSession(TimeStampedModel):
     name = models.CharField(
         max_length=20, help_text=_("Name of the session e.g. 2024/2025")
     )
+    start_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text=_("Session start date")
+    )
+
+    end_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text=_("Session end date")
+    )
     is_active = models.BooleanField(default=False)
 
     class Meta(auto_prefetch.Model.Meta):
@@ -37,33 +49,54 @@ class AcademicSession(TimeStampedModel):
 
 class AcademicTerm(TimeStampedModel):
     """
-    Represents a division of an academic session e.g. First Term.
+    Represents a term within an academic session.
     """
 
     session = auto_prefetch.ForeignKey(
-        "academics.AcademicSession", on_delete=models.CASCADE, related_name="terms"
+        "academics.AcademicSession",
+        on_delete=models.CASCADE,
+        related_name="terms",
     )
-    name = models.CharField(max_length=50, help_text=_("1st Term, 2nd Term, 3rd Term"))
+
+    term_number = models.PositiveSmallIntegerField(
+        default=1,
+        help_text=_("Term number within the session (e.g. 1 for First Term)"),
+    )
+    start_date = models.DateField(default=timezone.now)  # Safe default for migration
+    end_date = models.DateField(default=timezone.now)    # Safe default for migration
+
     is_active = models.BooleanField(default=False)
+
+    TERM_TYPES = [
+        ("HALF_TERM", "Half Term"),
+        ("END_OF_TERM", "End of Term"),
+        ("FULL_TERM", "Full Term"),
+    ]
+
     term_type = models.CharField(
         max_length=20,
-        choices=[
-            ("HALF_TERM", "Half Term"),
-            ("END_OF_TERM", "End of Term"),
-            ("FULL_TERM", "Full Term"),
-        ],
+        choices=TERM_TYPES,
         default="FULL_TERM",
     )
 
     class Meta(auto_prefetch.Model.Meta):
-        unique_together = ("session", "name")
-        verbose_name = _("Academic Term")
-        verbose_name_plural = _("Academic Terms")
+        unique_together = ("session", "term_number")
+        ordering = ["term_number"]
 
     def __str__(self):
         return f"{self.name} - {self.session}"
 
-
+    @property
+    def name(self):
+        """
+        Return a professional, human-friendly name for the term.
+        """
+        term_mapping = {
+            1: "First Term",
+            2: "Second Term",
+            3: "Third Term",
+        }
+        return term_mapping.get(self.term_number, f"Term {self.term_number}")
 class AssessmentPolicy(TimeStampedModel):
     """
     Defines configuration for grading continuous assessments per term.
@@ -346,6 +379,14 @@ class ClassRoom(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="classrooms",
     )
+    form_teacher = auto_prefetch.ForeignKey(
+        "users.TeacherProfile",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="form_classes",
+        help_text="Teacher assigned as the form teacher for this class",
+    )
 
     academic_class = models.CharField(
         max_length=20,
@@ -369,6 +410,27 @@ class ClassRoom(TimeStampedModel):
 
     def __str__(self):
         return f"{self.academic_class} {self.arm}"
+
+class StudentClassAssignment(TimeStampedModel):
+    student = auto_prefetch.ForeignKey(
+        "users.StudentProfile", on_delete=models.CASCADE,
+        related_name="class_assignments",
+    )
+    classroom = auto_prefetch.ForeignKey(
+        "academics.ClassRoom", on_delete=models.CASCADE,
+        related_name="student_assignments",
+    )
+    academic_session = auto_prefetch.ForeignKey(
+        "academics.AcademicSession", on_delete=models.CASCADE,
+    )
+    academic_term = auto_prefetch.ForeignKey(
+        "academics.AcademicTerm", null=True, blank=True,
+        on_delete=models.SET_NULL,
+    )
+    is_active = models.BooleanField(default=True)  # indicates current active class
+
+    class Meta(auto_prefetch.Model.Meta):
+        unique_together = ("student", "classroom", "academic_session")
 
 
 class TeachingAssignment(TimeStampedModel):

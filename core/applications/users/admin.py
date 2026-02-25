@@ -56,7 +56,7 @@ class UserAdmin(auth_admin.UserAdmin):
 
 @admin.register(StudentProfile)
 class StudentProfileAdmin(admin.ModelAdmin):
-    list_display = ["id", "user", "student_id", "current_class", "status"]
+    list_display = ["id", "user", "status", "student_id", "current_class", "status"]
     search_fields = ["student_id", "user__email", "user__name"]
     ordering = ["id"]
 
@@ -66,6 +66,7 @@ class TeacherProfileAdmin(admin.ModelAdmin):
     list_display = [
         "id",
         "user",
+        "status",
         "staff_id",
         "qualification",
         "specialization",

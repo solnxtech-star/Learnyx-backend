@@ -1,3 +1,5 @@
+import re
+
 from django.db import IntegrityError
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
@@ -17,12 +19,14 @@ from core.applications.users.models import TeacherProfile
 
 class AcademicSessionSerializer(serializers.ModelSerializer):
     """
-    Serializer for the AcademicSession model.
+    Enterprise-grade serializer for AcademicSession.
 
-    Enforces PRD Rules:
+    Enforces Business Rules:
+    - Unique session name per school.
     - Only one active session per school.
-    - Activating a session automatically deactivates others.
-    - Session names must follow YYYY/YYYY or YYYY-YYYY.
+    - Session name must follow YYYY/YYYY or YYYY-YYYY.
+    - End date must be after start date.
+    - School is derived from authenticated user.
     """
 
     school_name = serializers.CharField(source="school.name", read_only=True)
@@ -35,6 +39,8 @@ class AcademicSessionSerializer(serializers.ModelSerializer):
             "school",
             "school_name",
             "name",
+            "start_date",
+            "end_date",
             "is_active",
             "term_count",
             "created_at",
@@ -42,45 +48,101 @@ class AcademicSessionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at", "school"]
 
+    # -----------------------------------------------------
+    # DERIVED FIELDS
+    # -----------------------------------------------------
     def get_term_count(self, obj):
         return obj.terms.count()
 
+    # -----------------------------------------------------
+    # NAME FORMAT VALIDATION
+    # -----------------------------------------------------
     def validate_name(self, value):
-        import re
-
         pattern = r"^\d{4}[/-]\d{4}$"
         if not re.match(pattern, value):
             raise serializers.ValidationError(
-                _("Session must follow YYYY/YYYY or YYYY-YYYY"),
+                _("Session must follow YYYY/YYYY or YYYY-YYYY.")
             )
         return value
 
+    # -----------------------------------------------------
+    # GLOBAL VALIDATION
+    # -----------------------------------------------------
+    def validate(self, attrs):
+        self.context.get("request")
+        school = self.instance.school if self.instance else self._get_school()
+
+        name = attrs.get("name", getattr(self.instance, "name", None))
+        start_date = attrs.get("start_date", getattr(self.instance, "start_date", None))
+        end_date = attrs.get("end_date", getattr(self.instance, "end_date", None))
+
+        # ---------------------------------
+        # Prevent Duplicate Session Name
+        # ---------------------------------
+        if name:
+            qs = AcademicSession.objects.filter(
+                school=school,
+                name=name
+            )
+
+            if self.instance:
+                qs = qs.exclude(id=self.instance.id)
+
+            if qs.exists():
+                raise serializers.ValidationError(
+                    {"name": _("An academic session with this name already exists.")}
+                )
+
+        # ---------------------------------
+        # Validate Date Order
+        # ---------------------------------
+        if start_date and end_date:
+            if end_date <= start_date:
+                raise serializers.ValidationError(
+                    {"end_date": _("End date must be after start date.")}
+                )
+
+        return attrs
+
+    # -----------------------------------------------------
+    # SCHOOL CONTEXT
+    # -----------------------------------------------------
     def _get_school(self):
         request = self.context.get("request")
         if not request or not hasattr(request.user, "school"):
-            raise serializers.ValidationError(_("School context missing."))
+            raise serializers.ValidationError(
+                _("School context missing.")
+            )
         return request.user.school
 
+    # -----------------------------------------------------
+    # CREATE
+    # -----------------------------------------------------
+    @transaction.atomic
     def create(self, validated_data):
-        validated_data["school"] = self._get_school()
+        school = self._get_school()
+        validated_data["school"] = school
 
-        # If set active, deactivate others
+        # Ensure single active session per school
         if validated_data.get("is_active"):
             AcademicSession.objects.filter(
-                school=validated_data["school"],
+                school=school
             ).update(is_active=False)
 
         return super().create(validated_data)
 
+    # -----------------------------------------------------
+    # UPDATE
+    # -----------------------------------------------------
     @transaction.atomic
     def update(self, instance, validated_data):
+        # Ensure single active session per school
         if validated_data.get("is_active"):
             AcademicSession.objects.filter(
-                school=instance.school,
+                school=instance.school
             ).exclude(id=instance.id).update(is_active=False)
 
         return super().update(instance, validated_data)
-
 
 class OpenAcademicSessionSerializer(serializers.Serializer):
     """
@@ -689,8 +751,9 @@ class ClassroomSerializer(serializers.ModelSerializer):
 
 
 class TeachingAssignmentNestedSerializer(serializers.ModelSerializer):
-    classroom = serializers.CharField(source="classroom.name")
-    subject = serializers.CharField(source="subject.name")
+    classroom = serializers.StringRelatedField()
+    subject = serializers.StringRelatedField()
+
 
     class Meta:
         model = TeachingAssignment

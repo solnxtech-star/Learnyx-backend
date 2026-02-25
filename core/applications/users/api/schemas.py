@@ -467,29 +467,56 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
     list=extend_schema(
         summary="List Academic Sessions",
         description="""
-        Returns academic sessions for the authenticated user's school.
+        Returns academic sessions belonging to the authenticated user's school.
 
-        Notes:
-        - Results are scoped to the user's school.
-        - By default this returns all sessions; frontends may filter to `is_active=true`.
+        Behavior:
+        - Results are strictly scoped to the authenticated user's school.
+        - By default, only active sessions may be returned (based on backend configuration).
+        - Sessions are ordered by `start_date` (newest first).
+
+        Response fields:
+        - id
+        - school (UUID)
+        - school_name (string)
+        - name (string, format YYYY/YYYY or YYYY-YYYY)
+        - start_date (YYYY-MM-DD)
+        - end_date (YYYY-MM-DD)
+        - is_active (boolean)
+        - term_count (integer)
+        - created_at (datetime)
+        - updated_at (datetime)
         """,
         tags=["Admin Management"],
-        responses={200: AcademicSessionSerializer(many=True), 401: NOT_FOUND_RESP},
+        responses={
+            200: AcademicSessionSerializer(many=True),
+            401: UNAUTHORIZED_RESP,
+        },
     ),
 
     create=extend_schema(
         summary="Create Academic Session",
         description="""
-        Creates a new academic session.
+        Creates a new academic session for the authenticated user's school.
 
-        Business rules:
-        - Name must follow `YYYY/YYYY` or `YYYY-YYYY`.
+        Required fields:
+        - name
+        - start_date
+        - end_date
+
+        Business Rules:
+        - `name` must follow `YYYY/YYYY` or `YYYY-YYYY`.
+        - Session name must be unique per school.
+        - `end_date` must be strictly after `start_date`.
         - If `is_active=true`, all other sessions in the same school are automatically deactivated.
+        - School is automatically derived from the authenticated user.
+        - Duplicate session names return 400 (not 500).
 
         Example request body:
         ```json
         {
           "name": "2024/2025",
+          "start_date": "2024-09-01",
+          "end_date": "2025-07-31",
           "is_active": true
         }
         ```
@@ -505,19 +532,33 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
 
     retrieve=extend_schema(
         summary="Retrieve Academic Session",
-        description="Fetch a single academic session by ID.",
+        description="""
+        Fetch a single academic session by ID.
+
+        Notes:
+        - Scoped to authenticated user's school.
+        - Returns full session metadata.
+        """,
         tags=["Admin Management"],
-        responses={200: AcademicSessionSerializer, 404: NOT_FOUND_RESP},
+        responses={
+            200: AcademicSessionSerializer,
+            404: NOT_FOUND_RESP,
+        },
     ),
 
     update=extend_schema(
         summary="Update Academic Session",
         description="""
-        Fully update an existing academic session.
+        Fully updates an academic session.
 
-        Notes:
-        - Activation rules apply on update.
-        - Setting `is_active=true` will automatically deactivate other sessions.
+        Business Rules:
+        - Name format validation applies.
+        - Name must remain unique per school.
+        - `end_date` must be after `start_date`.
+        - If `is_active=true`, all other sessions in the same school are automatically deactivated.
+        - School cannot be modified.
+
+        All fields must be provided for PUT.
         """,
         tags=["Admin Management"],
         request=AcademicSessionSerializer,
@@ -530,39 +571,57 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
 
     partial_update=extend_schema(
         summary="Partially Update Academic Session",
+        description="""
+        Partially updates an academic session.
+
+        Business Rules:
+        - Same validation rules as full update.
+        - Partial fields allowed.
+        - If `is_active=true`, other sessions are automatically deactivated.
+        """,
         tags=["Admin Management"],
         request=AcademicSessionSerializer,
-        responses={200: AcademicSessionSerializer, 400: BAD_REQUEST_RESP},
+        responses={
+            200: AcademicSessionSerializer,
+            400: BAD_REQUEST_RESP,
+            404: NOT_FOUND_RESP,
+        },
     ),
 
     destroy=extend_schema(
         summary="Deactivate Academic Session",
         description="""
-        Soft-delete an academic session.
+        Soft-deletes (deactivates) an academic session.
 
-        Notes:
-        - Sets `is_active=false`
-        - Record remains in the database for audit/history purposes.
+        Behavior:
+        - Sets `is_active=false`.
+        - Record remains stored for historical/audit purposes.
+        - Does NOT permanently delete the record.
         """,
         tags=["Admin Management"],
-        responses={204: OpenApiResponse(description="No Content")},
+        responses={
+            204: OpenApiResponse(description="Academic session deactivated successfully."),
+            404: NOT_FOUND_RESP,
+        },
     ),
 
     open_session=extend_schema(
         summary="Open Academic Session",
         description="""
-        Opens an academic session.
+        Activates a session.
 
-        Business rules:
-        - Sets `is_active=true` on the selected session.
-        - Automatically closes all other sessions belonging to the same school.
-        - This endpoint performs a state transition and does not accept a request body.
+        Business Rules:
+        - Sets `is_active=true` for the selected session.
+        - Automatically sets `is_active=false` for all other sessions in the same school.
+        - Cannot open a session whose `end_date` has already passed.
+        - Does not accept a request body.
         """,
         tags=["Admin Management"],
         responses={
             200: OpenApiResponse(
                 description="Academic session opened successfully."
             ),
+            400: BAD_REQUEST_RESP,
             404: NOT_FOUND_RESP,
         },
     ),
@@ -570,12 +629,12 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
     close_session=extend_schema(
         summary="Close Academic Session",
         description="""
-        Closes an academic session.
+        Deactivates a session.
 
-        Business rules:
-        - Sets `is_active=false` on the selected session.
-        - Does not automatically open another session.
-        - This endpoint performs a state transition and does not accept a request body.
+        Business Rules:
+        - Sets `is_active=false` for the selected session.
+        - Does not activate another session automatically.
+        - Does not accept a request body.
         """,
         tags=["Admin Management"],
         responses={
@@ -587,7 +646,6 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
         },
     ),
 )
-
 
 # ============================================================================
 # Academic Term Schema Decorator
@@ -602,7 +660,7 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         - `session_id` (optional): Filter terms belonging to a specific session.
         """,
         parameters=[
-            OpenApiParameter("session_id", str, description="Academic Session ID")
+            OpenApiParameter("session_id", str, description="Academic Session ID", required=False)
         ],
         tags=["Admin Management"],
         responses={200: AcademicTermSerializer(many=True)},
@@ -632,15 +690,15 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         request=AcademicTermSerializer,
         responses={
             201: AcademicTermSerializer,
-            400: BAD_REQUEST_RESP,
-            404: NOT_FOUND_RESP,
+            400: "Bad Request",
+            404: "Not Found",
         },
     ),
 
     retrieve=extend_schema(
         summary="Retrieve Academic Term",
         tags=["Admin Management"],
-        responses={200: AcademicTermSerializer, 404: NOT_FOUND_RESP},
+        responses={200: AcademicTermSerializer, 404: "Not Found"},
     ),
 
     update=extend_schema(
@@ -648,14 +706,14 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         description="Updates an academic term. Activation rules are enforced by the serializer.",
         tags=["Admin Management"],
         request=AcademicTermSerializer,
-        responses={200: AcademicTermSerializer, 400: BAD_REQUEST_RESP},
+        responses={200: AcademicTermSerializer, 400: "Bad Request"},
     ),
 
     partial_update=extend_schema(
         summary="Partially Update Academic Term",
         tags=["Admin Management"],
         request=AcademicTermSerializer,
-        responses={200: AcademicTermSerializer, 400: BAD_REQUEST_RESP},
+        responses={200: AcademicTermSerializer, 400: "Bad Request"},
     ),
 
     destroy=extend_schema(
@@ -663,6 +721,41 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         description="Soft delete. Marks the term as inactive (`is_active=false`).",
         tags=["Admin Management"],
         responses={204: OpenApiResponse(description="No Content")},
+    ),
+
+    # ==========================
+    # BULK CREATE
+    # ==========================
+    bulk_create=extend_schema(
+        summary="Bulk Create Academic Terms",
+        description="""
+        Creates multiple academic terms in a single request under the same session.
+
+        Business rules:
+        - Session must exist and be active.
+        - Only one term can be active at a time (including existing terms in the session).
+        - Duplicate `term_number` values for the same session are not allowed.
+        - `term_type` is automatically assigned based on `term_number`.
+        - `start_date` must be before `end_date`.
+
+        Example request:
+        ```json
+        {
+          "session": "<session_uuid>",
+          "terms": [
+            {"term_number": 1, "start_date": "2026-01-10", "end_date": "2026-04-05", "is_active": true},
+            {"term_number": 2, "start_date": "2026-04-15", "end_date": "2026-07-30", "is_active": false}
+          ]
+        }
+        ```
+        """,
+        tags=["Admin Management"],
+        request=None,  # Custom payload, not a single serializer
+        responses={
+            201: OpenApiResponse(description="List of created terms with ID, term_type, and name"),
+            400: "Bad Request",
+            404: "Not Found",
+        },
     ),
 
     # ==========================
@@ -683,11 +776,9 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         """,
         tags=["Admin Management"],
         responses={
-            200: OpenApiResponse(
-                description="Term successfully opened for score entry."
-            ),
-            400: BAD_REQUEST_RESP,
-            404: NOT_FOUND_RESP,
+            200: OpenApiResponse(description="Term successfully opened for score entry."),
+            400: "Bad Request",
+            404: "Not Found",
         },
     ),
 
@@ -704,15 +795,12 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         """,
         tags=["Admin Management"],
         responses={
-            200: OpenApiResponse(
-                description="Term successfully closed for score entry."
-            ),
-            400: BAD_REQUEST_RESP,
-            404: NOT_FOUND_RESP,
+            200: OpenApiResponse(description="Term successfully closed for score entry."),
+            400: "Bad Request",
+            404: "Not Found",
         },
     ),
 )
-
 
 # ============================================================================
 # Subject Schema Decorator

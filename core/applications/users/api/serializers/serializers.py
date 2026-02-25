@@ -17,7 +17,8 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.settings import api_settings
 
-from core.applications.academics.models import ClassRoom
+from core.applications.academics.models import AcademicSession, ClassRoom
+from core.applications.academics.models import StudentClassAssignment
 from core.applications.users.models import AdminProfile
 from core.applications.users.models import School
 from core.applications.users.models import StudentProfile
@@ -226,10 +227,11 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
     """
     Student signup serializer using school_code.
 
+    Responsibilities:
     - Validates school via school_code
     - Validates classroom belongs to that school
-    - Creates User with only proper fields
-    - Creates StudentProfile with classroom and other profile fields
+    - Creates User and StudentProfile with proper fields
+    - Creates initial StudentClassAssignment for the active academic session
     """
 
     role = UserRole.STUDENT
@@ -251,6 +253,10 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
     classroom_id = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     school_code = serializers.CharField(write_only=True, required=True)
+    academic_session_id = serializers.CharField(
+        write_only=True, required=False, allow_blank=True,
+        help_text="Optional: Assign to a specific academic session. Defaults to active session."
+    )
 
     class Meta(BaseRoleCreateSerializer.Meta):
         fields = BaseRoleCreateSerializer.Meta.fields + (
@@ -260,54 +266,71 @@ class CustomUserCreateSerializer(BaseRoleCreateSerializer):
             "address",
             "classroom_id",
             "school_code",
+            "academic_session_id",
         )
 
     # -----------------------------
     # Validate school & classroom
     # -----------------------------
     def validate(self, attrs):
-        # First call parent validation to extract profile fields and handle password confirmation
         attrs = super().validate(attrs)
 
-        # Now validate school and classroom
-        school_code = self._school_code  # Already extracted by parent class
+        # Validate school
+        school_code = self._school_code
         try:
             self.school = School.objects.get(school_code=school_code)
         except School.DoesNotExist:
             raise serializers.ValidationError({"school_code": "Invalid school code."})
 
-        # Extract classroom_id from profile data (already extracted by parent)
+        # Validate classroom
         classroom_id = self._profile_data.get("classroom_id")
         if classroom_id:
             try:
                 self.classroom = ClassRoom.objects.get(id=classroom_id, school=self.school)
-                # Remove classroom_id from profile_data since we'll handle it separately
                 del self._profile_data["classroom_id"]
             except ClassRoom.DoesNotExist:
                 raise serializers.ValidationError({"classroom_id": "Invalid classroom selected."})
         else:
             self.classroom = None
 
+        # Validate academic session if provided
+        session_id = self._profile_data.get("academic_session_id")
+        if session_id:
+            try:
+                self.academic_session = AcademicSession.objects.get(id=session_id, school=self.school)
+            except AcademicSession.DoesNotExist:
+                raise serializers.ValidationError({"academic_session_id": "Invalid academic session."})
+        else:
+            # Default to active session
+            self.academic_session = AcademicSession.objects.filter(school=self.school, is_active=True).first()
+            if not self.academic_session:
+                raise serializers.ValidationError({"academic_session": "No active academic session found for the school."})
+
         return attrs
 
     # -----------------------------
-    # Override create to handle classroom assignment
+    # Create User, Profile, and initial assignment
     # -----------------------------
     @transaction.atomic
     def create(self, validated_data):
-        # Call parent create method which handles user creation and basic profile creation
+        # Create User and StudentProfile
         user = super().create(validated_data)
+        profile = StudentProfile.objects.get(user=user)
 
-        # Additional handling for classroom assignment
+        # Assign classroom if provided
         if self.classroom:
-            # Get the created profile
-            profile = StudentProfile.objects.get(user=user)
             profile.classroom = self.classroom
-            profile.current_class = self.classroom.academic_class
-            profile.save(update_fields=["classroom", "current_class"])
+            profile.save(update_fields=["classroom"])
+
+            # Create the initial StudentClassAssignment
+            StudentClassAssignment.objects.create(
+                student=profile,
+                classroom=self.classroom,
+                academic_session=self.academic_session,
+                is_active=True,
+            )
 
         return user
-
 class CustomTeacherCreateSerializer(BaseRoleCreateSerializer):
     role = UserRole.TEACHER
     profile_model = TeacherProfile
