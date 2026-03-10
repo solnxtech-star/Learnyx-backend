@@ -6,10 +6,11 @@ from django.utils.translation import gettext_lazy as _
 
 from .forms import UserAdminChangeForm
 from .forms import UserAdminCreationForm
+from .models import AdminProfile
 from .models import School
 from .models import StudentProfile
 from .models import TeacherProfile
-from .models import AdminProfile
+from .models import TenantAwareModel
 from .models import User
 
 if settings.DJANGO_ADMIN_FORCE_ALLAUTH:
@@ -17,6 +18,7 @@ if settings.DJANGO_ADMIN_FORCE_ALLAUTH:
     # https://docs.allauth.org/en/latest/common/admin.html#admin
     admin.autodiscover()
     admin.site.login = secure_admin_login(admin.site.login)  # type: ignore[method-assign]
+
 
 
 @admin.register(User)

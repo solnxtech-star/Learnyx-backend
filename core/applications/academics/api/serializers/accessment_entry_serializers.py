@@ -4,10 +4,12 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from rest_framework import serializers
 
-from core.applications.academics.models import AcademicSession, AssessmentType
+from core.applications.academics.models import AcademicSession
 from core.applications.academics.models import AcademicTerm
 from core.applications.academics.models import AssessmentRecord
+from core.applications.academics.models import AssessmentType
 from core.applications.academics.models import ClassRoom
+from core.applications.academics.models import StudentClassAssignment
 from core.applications.academics.models import StudentSubjectEnrollment
 from core.applications.academics.models import Subject
 from core.applications.academics.models import TeachingAssignment
@@ -17,9 +19,29 @@ from core.applications.users.models import User
 
 
 class UserMiniSerializer(serializers.ModelSerializer):
+    school = serializers.SerializerMethodField()
     class Meta:
         model = User
-        fields = ["id", "name", "email"]
+        fields = [
+            "id",
+            "name",
+            "email",
+            "phone_number",
+            "role",
+            "is_verified",
+            "date_joined",
+            "last_login",
+            "school",
+        ]
+        read_only_fields = fields
+
+    def get_school(self, obj):
+        if not obj.school:
+            return None
+        return {
+            "id": str(obj.school.id),
+            "name": obj.school.name,
+        }
 
 
 class ClassroomMiniSerializer(serializers.ModelSerializer):
@@ -27,6 +49,45 @@ class ClassroomMiniSerializer(serializers.ModelSerializer):
         model = ClassRoom
         fields = ["id", "academic_class", "arm"]
 
+class StudentUserUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = [
+            "name",
+            "email",
+            "phone_number",
+        ]
+
+class StudentUpdateSerializer(serializers.ModelSerializer):
+    user = StudentUserUpdateSerializer()
+
+    class Meta:
+        model = StudentProfile
+        fields = [
+            "user",
+            "guardian_name",
+            "guardian_phone",
+            "address",
+            "gender",
+            "admission_date",
+        ]
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop("user", None)
+
+        # --- Update User ---
+        if user_data:
+            user = instance.user
+            for attr, value in user_data.items():
+                setattr(user, attr, value)
+            user.save()
+
+        # --- Update Student Profile ---
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        instance.save()
+        return instance
 
 class StudentCurrentClassSerializer(serializers.ModelSerializer):
     """
@@ -67,8 +128,10 @@ class StudentListSerializer(serializers.ModelSerializer):
     """
     Serializer for listing students with minimal details.
     """
-    user = UserMiniSerializer()
-    current_classroom = ClassroomMiniSerializer(source="classroom")
+
+    user = UserMiniSerializer(read_only=True)
+    current_classroom = serializers.SerializerMethodField()
+    current_class = serializers.SerializerMethodField()
 
     class Meta:
         model = StudentProfile
@@ -79,6 +142,35 @@ class StudentListSerializer(serializers.ModelSerializer):
             "current_class",
             "current_classroom",
         ]
+
+    def get_current_classroom(self, obj):
+        """
+        Returns the currently active classroom.
+        """
+
+        active_assignment = obj.class_assignments.filter(
+            is_active=True
+        ).select_related("classroom").first()
+
+        if not active_assignment:
+            return None
+
+        return ClassroomMiniSerializer(active_assignment.classroom).data
+
+    def get_current_class(self, obj):
+        """
+        Returns formatted class label (e.g., JSS1A).
+        """
+
+        active_assignment = obj.class_assignments.filter(
+            is_active=True
+        ).select_related("classroom").first()
+
+        if not active_assignment:
+            return None
+
+        classroom = active_assignment.classroom
+        return f"{classroom.academic_class}{classroom.arm}"
 
 class StudentDetailSerializer(serializers.ModelSerializer):
     """
@@ -426,3 +518,141 @@ class BulkAssessmentEntrySerializer(serializers.Serializer):
             "records": AssessmentRecordSerializer(records, many=True).data,
             "count": len(records),
         }
+
+class StudentNestedSerializer(serializers.ModelSerializer):
+    """
+    Read-only nested representation of a student's class assignment.
+
+    Includes the class name and academic session for display purposes.
+    """
+    class_name = serializers.CharField(source="classroom.name", read_only=True)
+    session_name = serializers.CharField(source="academic_session.name", read_only=True)
+
+    class Meta:
+        model = StudentClassAssignment
+        fields = ["id", "student_id", "class_name", "session_name", "is_active"]
+        read_only_fields = fields
+
+
+class StudentPromotionSerializer(serializers.Serializer):
+    """
+    Serializer for promoting or demoting students to a target class
+    within a specific academic session.
+
+    Responsibilities:
+        - Validate existence of students, target class, and session.
+        - Deactivate current active assignments (except target class/session).
+        - Create or reactivate StudentClassAssignment.
+        - Sync StudentProfile denormalized fields (classroom, current_class).
+        - Optionally record a reason for audit/logging purposes.
+
+    Notes:
+        - StudentClassAssignment is the source of truth.
+        - StudentProfile fields are denormalized mirrors for convenience.
+    """
+
+    student_ids = serializers.ListField(
+        child=serializers.CharField(),
+        write_only=True,
+        help_text="List of student IDs (strings)."
+    )
+
+    target_class_id = serializers.CharField(
+        help_text="ID of the target class (string)."
+    )
+
+    academic_session_id = serializers.CharField(
+        help_text="ID of the academic session (string)."
+    )
+
+    reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Optional reason for audit logging."
+    )
+
+    # ---------------------------------------------------------
+    # VALIDATION
+    # ---------------------------------------------------------
+    def validate(self, attrs):
+        student_ids = attrs["student_ids"]
+        target_class_id = attrs["target_class_id"]
+        academic_session_id = attrs["academic_session_id"]
+
+        # Fetch students once
+        students = StudentProfile.objects.filter(id__in=student_ids)
+        if students.count() != len(student_ids):
+            found_ids = set(students.values_list("id", flat=True))
+            missing_ids = set(student_ids) - found_ids
+            raise serializers.ValidationError(
+                f"Invalid student IDs: {sorted(missing_ids)}"
+            )
+
+        # Validate target class
+        try:
+            target_class = ClassRoom.objects.get(id=target_class_id)
+        except ClassRoom.DoesNotExist:
+            raise serializers.ValidationError(
+                {"target_class_id": "Target class does not exist."}
+            )
+
+        # Validate academic session
+        try:
+            academic_session = AcademicSession.objects.get(id=academic_session_id)
+        except AcademicSession.DoesNotExist:
+            raise serializers.ValidationError(
+                {"academic_session_id": "Academic session does not exist."}
+            )
+
+        # Store objects to avoid redundant queries in save()
+        attrs["students"] = students
+        attrs["target_class"] = target_class
+        attrs["academic_session"] = academic_session
+
+        return attrs
+
+    # ---------------------------------------------------------
+    # SAVE (ATOMIC + DUPLICATE SAFE)
+    # ---------------------------------------------------------
+    def save(self):
+        students = self.validated_data["students"]
+        target_class = self.validated_data["target_class"]
+        academic_session = self.validated_data["academic_session"]
+        reason = self.validated_data.get("reason", "")
+
+        assignments_created = []
+
+        with transaction.atomic():
+
+            # Deactivate current active assignments (except target class/session)
+            StudentClassAssignment.objects.filter(
+                student__in=students,
+                is_active=True
+            ).exclude(
+                classroom=target_class,
+                academic_session=academic_session
+            ).update(is_active=False)
+
+            # Create or reactivate assignments
+            for student in students:
+
+                assignment, created = StudentClassAssignment.objects.get_or_create(
+                    student=student,
+                    classroom=target_class,
+                    academic_session=academic_session,
+                    defaults={"is_active": True}
+                )
+
+                # Reactivate if assignment exists but inactive
+                if not created and not assignment.is_active:
+                    assignment.is_active = True
+                    assignment.save(update_fields=["is_active"])
+
+                assignments_created.append(assignment)
+
+                #  Sync denormalized StudentProfile fields
+                student.sync_current_class_fields(classroom=target_class)
+
+                # Optional: record reason in audit/logging system
+
+        return assignments_created

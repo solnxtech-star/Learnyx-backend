@@ -1,6 +1,7 @@
 from django.db import models
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
+from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters
 from rest_framework import serializers
@@ -42,40 +43,41 @@ from core.helper.permissions import IsPrincipalOrSchoolOwnerForPolicies
 @AssessmentPolicySchema
 class AssessmentPolicyViewSet(viewsets.ModelViewSet):
     """
-    Assessment Policy API.
+    Tenant-aware API for managing Assessment Policies.
 
     Responsibilities:
-    - List and retrieve assessment policies for a school
-    - Create policies with strict business rules
-    - Edit policies safely without breaking uniqueness constraints
+    - List and retrieve assessment policies scoped to the authenticated user's school
+    - Create and update policies with strict business rules
     - Apply predefined default policies
-    - Fetch active policy/policies for a term
+    - Fetch active policy/policies for a specific term
     """
 
     permission_classes = [IsAuthenticated, IsPrincipalOrSchoolOwnerForPolicies]
-    filter_backends = [filters.OrderingFilter, filters.SearchFilter]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter, filters.SearchFilter]
+    filterset_fields = ["term", "is_active", "name"]
     ordering_fields = ["created_at", "name", "term"]
-    search_fields = ["name", "term__name"]
+    search_fields = ["name", "term__term_number", "term__session__name"]
+    ordering = ["term__session__name", "term__term_number", "name"]
 
     # -----------------------------
-    # Queryset scoping
+    # Queryset
     # -----------------------------
     def get_queryset(self):
         """
-        Scope all operations strictly to the user's school.
+        Restrict all queries to the authenticated user's school.
         """
-        return (
-            AssessmentPolicy.objects
-            .filter(school=self.request.user.school)
-            .select_related("school", "term")
-        )
+        school = self.request.user.school
+        if not school:
+            return AssessmentPolicy.objects.none()
+
+        return AssessmentPolicy.objects.for_school(school).select_related("school", "term")
 
     # -----------------------------
     # Serializer selection
     # -----------------------------
     def get_serializer_class(self):
         """
-        Use explicit serializers per action.
+        Return appropriate serializer per action.
         """
         if self.action == "create":
             return AssessmentPolicyCreateSerializer
@@ -84,11 +86,11 @@ class AssessmentPolicyViewSet(viewsets.ModelViewSet):
         return AssessmentPolicyListSerializer
 
     # -----------------------------
-    # Create hook
+    # Creation
     # -----------------------------
     def perform_create(self, serializer):
         """
-        School is always derived from the authenticated user.
+        Ensure created policy is tenant-aware.
         """
         serializer.save(school=self.request.user.school)
 
@@ -96,81 +98,72 @@ class AssessmentPolicyViewSet(viewsets.ModelViewSet):
     # Custom actions
     # -----------------------------
     @ApplyDefaultPolicySchema
-    @action(
-        detail=False,
-        methods=["post"],
-        url_path="apply-default",
-    )
+    @action(detail=False, methods=["post"], url_path="apply-default")
     @transaction.atomic
     def apply_default(self, request):
         """
         Apply a predefined default assessment policy to a term.
 
         - Deactivates any existing active policy for the term
-        - Creates assessment types automatically
+        - Creates associated assessment types automatically
         """
-        serializer = DefaultAssessmentPolicySerializer(
-            data=request.data,
-            context={"request": request},
-        )
+        serializer = DefaultAssessmentPolicySerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-
         policy = serializer.save()
 
         return Response(
             {
-                "message": "Default assessment policy created successfully.",
-                "policy": AssessmentPolicyListSerializer(
-                    policy, context={"request": request}
-                ).data,
+                "message": "Default assessment policy applied successfully.",
+                "policy": AssessmentPolicyListSerializer(policy, context={"request": request}).data,
             },
             status=status.HTTP_201_CREATED,
         )
 
     @ActivePolicyForTermSchema
-    @action(
-        detail=False,
-        methods=["get"],
-        url_path="active-for-term",
-    )
+    @action(detail=False, methods=["get"], url_path="active-for-term")
     def active_for_term(self, request):
         """
-        Retrieve active assessment policy/policies.
+        Retrieve active assessment policy/policies for the school.
 
-        - If `term` query param is provided → return single active policy
-        - If omitted → return all active policies for the school
+        Query Params:
+        - `term` (optional): Return active policy for this term only
+        - If omitted, returns all active policies
         """
         school = request.user.school
+        if not school:
+            return Response([], status=status.HTTP_200_OK)
+
+        queryset = AssessmentPolicy.objects.for_school(school).filter(is_active=True).select_related("term", "school")
+
         term_id = request.query_params.get("term")
-
-        queryset = AssessmentPolicy.objects.filter(
-            school=school,
-            is_active=True,
-        ).select_related("term", "school")
-
         if term_id:
             policy = queryset.filter(term_id=term_id).first()
-
             if not policy:
                 return Response(
                     {"detail": "No active assessment policy found for this term."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+            return Response(AssessmentPolicyListSerializer(policy, context={"request": request}).data, status=status.HTTP_200_OK)
 
-            return Response(
-                AssessmentPolicyListSerializer(
-                    policy, context={"request": request}
-                ).data,
-                status=status.HTTP_200_OK,
-            )
+        return Response(AssessmentPolicyListSerializer(queryset, many=True, context={"request": request}).data, status=status.HTTP_200_OK)
 
-        return Response(
-            AssessmentPolicyListSerializer(
-                queryset, many=True, context={"request": request}
-            ).data,
-            status=status.HTTP_200_OK,
-        )
+    # -----------------------------
+    # Update & Delete
+    # -----------------------------
+    @transaction.atomic
+    def perform_update(self, serializer):
+        """
+        Ensure updates are tenant-safe.
+        """
+        serializer.save(school=self.request.user.school)
 
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        """
+        Soft-delete: mark policy as inactive rather than hard delete.
+        """
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])
 
 # -------------------------------------------------------
 # Assessment Type ViewSet

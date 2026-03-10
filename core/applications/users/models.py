@@ -5,93 +5,106 @@ from typing import ClassVar
 import auto_prefetch
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
+from core.applications.academics.models import ClassRoom
+from core.applications.academics.models import StudentClassAssignment
 from core.helper.enums import AcademicClass
 from core.helper.enums import AdminType
 from core.helper.enums import AdmissionStatus
 from core.helper.enums import Gender
 from core.helper.enums import UserRole
+from core.helper.models import TenantAwareModel
 from core.helper.models import TimeStampedModel
 
+from .managers import SchoolManager
+from .managers import TenantManager
 from .managers import UserManager
 
 
+# --------------------------
+# Core School Model
+# --------------------------
 class School(models.Model):
-    """Main model for multi-tenant SaaS."""
-
+    """Represents a school tenant in the SaaS platform."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-
     name = models.CharField(max_length=255)
     slug = models.SlugField(unique=True, db_index=True)
-
-    # IMPORTANT: Used for signup by school_code
     school_code = models.CharField(
-        max_length=12,
-        unique=True,
-        editable=False,
-        db_index=True,
+        max_length=12, unique=True, editable=False, db_index=True,
         help_text=_("Unique auto-generated code used for user onboarding"),
     )
-
+    is_active = models.BooleanField(default=True)
+    subscription_plan = models.CharField(max_length=50, blank=True, null=True)
+    subscription_expiry = models.DateField(blank=True, null=True)
+    max_students = models.PositiveIntegerField(default=1000)
     address = models.CharField(max_length=255, blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SchoolManager()
+    class Meta:
+        ordering = ["name"]
+        verbose_name = _("School")
+        verbose_name_plural = _("Schools")
+
     def __str__(self):
-        return self.name
+        return f"{self.name} ({self.school_code})"
 
     def save(self, *args, **kwargs):
-        # Auto-generate slug if missing
+        """
+        Generate slug and school_code if missing.
+        Validate subscription expiry date.
+        """
         if not self.slug:
             self.slug = slugify(self.name)
 
-        # Auto-generate school code if missing
         if not self.school_code:
-            self.school_code = self.generate_school_code()
+            # Retry generation to avoid collisions
+            for _ in range(5):
+                code = f"SCH-{secrets.token_hex(4).upper()}"
+                if not School.objects.filter(school_code=code).exists():
+                    self.school_code = code
+                    break
+            else:
+                raise ValidationError(_("Unable to generate unique school_code."))
+
+        # Optional subscription validation
+        if self.subscription_expiry and self.subscription_expiry < self.created_at.date():
+            raise ValidationError(_("Subscription expiry cannot be in the past."))
 
         super().save(*args, **kwargs)
 
-    @staticmethod
-    def generate_school_code():
-        """Generate a secure unique code like: SCH-84JF9KD2."""
-        return "SCH-" + secrets.token_hex(4).upper()
 
-
+# --------------------------
+# Custom User Model
+# --------------------------
 class User(AbstractUser):
-    """Custom user model with email login + school assignment."""
-
+    """Custom user with email login and optional school assignment."""
     school = models.ForeignKey(
-        "users.School",
+        School,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="users",
     )
-
     name = models.CharField(_("Full Name"), max_length=255, blank=True)
     email = models.EmailField(_("Email Address"), unique=True)
     phone_number = models.CharField(
-        _("Phone Number"),
-        max_length=20,
-        blank=True,
-        null=True,
+        _("Phone Number"), max_length=20, blank=True, null=True
     )
-
     role = models.CharField(
-        _("User Role"),
-        max_length=20,
-        choices=UserRole.choices,
-        default=UserRole.STUDENT,
+        _("User Role"), max_length=20,
+        choices=UserRole.choices, default=UserRole.STUDENT
     )
-
     is_verified = models.BooleanField(_("Email Verified"), default=False)
     date_joined = models.DateTimeField(_("Date Joined"), auto_now_add=True)
     last_login = models.DateTimeField(_("Last Login"), blank=True, null=True)
 
-    # Remove Django default fields
+    # Remove default Django fields we don't need
     username = None
     first_name = None
     last_name = None
@@ -110,294 +123,178 @@ class User(AbstractUser):
         return f"{self.email} ({self.get_role_display()})"
 
 
+# --------------------------
+# Base Profile for All Roles
+# --------------------------
 class BaseProfile(TimeStampedModel):
-    """
-    Abstract base profile shared by all role-specific profile models.
-
-    This includes:
-    - A one-to-one relation with the User model
-    - Multi-tenancy support (profile.school references user.school)
-    - Approval workflow fields (status, approved_by)
-    """
-
+    """Abstract profile base with tenant awareness and approval workflow."""
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     status = models.CharField(
-        max_length=20,
-        choices=AdmissionStatus.choices,
-        default=AdmissionStatus.PENDING,
-        help_text=_("Approval status for this profile."),
+        max_length=20, choices=AdmissionStatus.choices,
+        default=AdmissionStatus.PENDING
     )
-
-    approved_by = models.CharField(
-        max_length=100,
-        blank=True,
-        null=True,
-        help_text=_("Email of the admin who approved or rejected this profile."),
-    )
+    approved_by = models.CharField(max_length=100, blank=True, null=True)
 
     @property
     def school(self):
-        """Return the school this profile belongs to (from user)."""
         return self.user.school
 
     class Meta(auto_prefetch.Model.Meta):
         abstract = True
 
 
+# --------------------------
+# Admin Profile
+# --------------------------
 class AdminProfile(BaseProfile):
-    """
-    Extended profile for admin users within a school.
-
-    Includes:
-    - Admin type (School Owner, Principal, etc.)
-    - Optional organizational attributes
-    """
-
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="adminprofile",
-    )
     admin_type = models.CharField(
-        max_length=50,
-        choices=AdminType.choices,
-        default=AdminType.OTHER,
-        help_text=_("Type of administrative role this user holds."),
+        max_length=50, choices=AdminType.choices,
+        default=AdminType.OTHER
     )
-    position = models.CharField(
-        _("Position"),
-        max_length=100,
-        blank=True,
-        null=True,
-    )
-    school_name = models.CharField(
-        _("School Name"),
-        max_length=255,
-        blank=True,
-        null=True,
-    )
+    position = models.CharField(max_length=100, blank=True, null=True)
+    school_name = models.CharField(max_length=255, blank=True, null=True)
+
+    objects = TenantManager()
 
     def __str__(self):
         return f"Admin ({self.admin_type}): {self.user.name or self.user.email}"
 
 
+# --------------------------
+# Teacher Profile
+# --------------------------
 class TeacherProfile(BaseProfile):
-    """
-    Extended teacher profile containing professional
-    and departmental information.
-    """
-
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="teacherprofile",
-    )
-
     classrooms = models.ManyToManyField(
-        "academics.ClassRoom",
-        related_name="teachers",
-        blank=True,
-        help_text=_("Classrooms assigned to this teacher."),
+        "academics.ClassRoom", related_name="teachers", blank=True
     )
-
     subjects = models.ManyToManyField(
-        "academics.Subject",
-        related_name="teachers",
-        blank=True,
-        help_text=_("Subjects this teacher can teach."),
+        "academics.Subject", related_name="teachers", blank=True
     )
-
-    staff_id = models.CharField(_("Staff ID"), max_length=50, unique=True)
+    staff_id = models.CharField(max_length=50, unique=True)
     qualification = models.CharField(max_length=100, blank=True, null=True)
     specialization = models.CharField(max_length=100, blank=True, null=True)
     department = models.CharField(max_length=100, blank=True, null=True)
+
+    objects = TenantManager()
 
     def __str__(self):
         return f"Teacher: {self.user.name or self.user.email}"
 
 
+# --------------------------
+# Student Profile
+# --------------------------
 class StudentProfile(BaseProfile):
-    """
-    Stores core academic and identity information for a student.
-
-    This model represents the student's current academic state and
-    maintains backward-compatible fields for guardian and address
-    information.
-
-    Notes:
-        - Legacy fields (guardian_name, guardian_phone, address) are
-          retained to avoid breaking existing migrations.
-        - More structured contact data is now handled via StudentContact.
-    """
-
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="studentprofile",
-    )
-
     classroom = auto_prefetch.ForeignKey(
-        "academics.ClassRoom",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="students",
+        "academics.ClassRoom", on_delete=models.SET_NULL,
+        null=True, blank=True, related_name="students",
     )
-
-    student_id = models.CharField(
-        _("Student ID"),
-        max_length=50,
-        unique=True,
-        blank=True,
-        editable=False,
-        help_text=_("Automatically generated unique student identifier."),
-    )
-
-    gender = models.CharField(
-        max_length=10,
-        choices=Gender.choices,
-        blank=True,
-    )
-
+    student_id = models.CharField(max_length=50, unique=True, blank=True, editable=False)
+    gender = models.CharField(max_length=10, choices=Gender.choices, blank=True)
     current_class = models.CharField(
-        max_length=20,
-        choices=AcademicClass.choices,
-        blank=True,
-        null=True,
-        help_text=_("Student's current academic level (e.g. JSS1, SS2)."),
+        max_length=20, choices=AcademicClass.choices, \
+        blank=True, null=True
     )
+    admission_date = models.DateField(blank=True, null=True)
+    guardian_name = models.CharField(max_length=100, blank=True, null=True)
+    guardian_phone = models.CharField(max_length=20, blank=True, null=True)
+    address = models.CharField(max_length=255, blank=True, null=True)
 
-    admission_date = models.DateField(
-        blank=True,
-        null=True,
-        help_text=_("Date student was officially admitted."),
-    )
-
-    guardian_name = models.CharField(
-        max_length=100,
-        blank=True,
-        null=True,
-    )
-    guardian_phone = models.CharField(
-        max_length=20,
-        blank=True,
-        null=True,
-    )
-    address = models.CharField(
-        max_length=255,
-        blank=True,
-        null=True,
-    )
+    objects = TenantManager()
 
     def save(self, *args, **kwargs):
-        """
-        Auto-generates a unique student ID on first save.
-
-        Format: STD-XXXXXXXX
-        Example: STD-A1B2C3D4
-        """
         if not self.student_id:
             self.student_id = f"STD-{uuid.uuid4().hex[:8].upper()}"
         super().save(*args, **kwargs)
+
+    @property
+    def current_assignment(self) -> StudentClassAssignment:
+        return self.class_assignments.filter(is_active=True).select_related(
+            "classroom", "academic_session", "academic_term"
+        ).first()
+
+    @property
+    def active_classroom(self):
+        assignment = self.current_assignment
+        return assignment.classroom if assignment else None
+
+    @property
+    def active_class(self):
+        classroom = self.active_classroom
+        return classroom.academic_class if classroom else None
+
+    def sync_current_class_fields(self, classroom: ClassRoom = None):
+        if classroom:
+            self.classroom = classroom
+            self.current_class = classroom.academic_class
+        else:
+            assignment = self.current_assignment
+            if assignment:
+                self.classroom = assignment.classroom
+                self.current_class = assignment.classroom.academic_class
+            else:
+                self.classroom = None
+                self.current_class = None
+        super().save(update_fields=["classroom", "current_class"])
 
     def __str__(self):
         return f"Student: {self.user.name or self.user.email}"
 
 
-class StudentContact(TimeStampedModel):
-    """
-    Stores guardian and emergency contact information for a student.
-
-    A student can have multiple contacts such as:
-        - Father
-        - Mother
-        - Guardian
-        - Emergency contact
-
-    One contact can be marked as the primary contact.
-    """
-
+# --------------------------
+# Student Contact
+# --------------------------
+class StudentContact(TenantAwareModel):
     student = models.ForeignKey(
-        "users.StudentProfile",
-        on_delete=models.CASCADE,
-        related_name="contacts",
+        "users.StudentProfile", on_delete=models.CASCADE,
+        related_name="contacts"
     )
+    name = models.CharField(max_length=255)
+    relationship = models.CharField(max_length=100)
+    phone = models.CharField(max_length=20)
+    email = models.EmailField(blank=True, null=True)
+    is_primary = models.BooleanField(default=False)
 
-    name = models.CharField(
-        max_length=255,
-        help_text=_("Full name of the contact person."),
-    )
+    objects = TenantManager()
 
-    relationship = models.CharField(
-        max_length=100,
-        help_text=_("Relationship to student e.g. Father, Mother, Guardian."),
-    )
-
-    phone = models.CharField(
-        max_length=20,
-        help_text=_("Primary phone number."),
-    )
-
-    email = models.EmailField(
-        blank=True,
-        null=True,
-        help_text=_("Optional email address."),
-    )
-
-    is_primary = models.BooleanField(
-        default=False,
-        help_text=_("Marks this contact as the primary guardian."),
-    )
+    class Meta(auto_prefetch.Model.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "is_primary"],
+                condition=models.Q(is_primary=True),
+                name="unique_primary_contact_per_student",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.relationship}) - {self.student}"
 
 
-class StudentEnrollment(TimeStampedModel):
-    """
-    Tracks the academic history of a student across sessions and terms.
-
-    This model allows:
-        - Promotion tracking
-        - Term-based enrollment
-        - School transfer history
-
-    Only one active enrollment should exist per student per session.
-    """
-
+# --------------------------
+# Student Enrollment
+# --------------------------
+class StudentEnrollment(TenantAwareModel):
     student = models.ForeignKey(
-        "users.StudentProfile",
-        on_delete=models.CASCADE,
-        related_name="enrollments",
+        "users.StudentProfile", on_delete=models.CASCADE,
+        related_name="enrollments"
     )
-
     classroom = auto_prefetch.ForeignKey(
-        "academics.ClassRoom",
-        on_delete=models.CASCADE,
-        related_name="enrollments",
+        "academics.ClassRoom", on_delete=models.CASCADE, related_name="enrollments",
     )
-
     session = auto_prefetch.ForeignKey(
-        "academics.AcademicSession",
-        on_delete=models.CASCADE,
-        related_name="enrollments",
+        "academics.AcademicSession", on_delete=models.CASCADE, related_name="enrollments",
     )
-
     term = auto_prefetch.ForeignKey(
-        "academics.AcademicTerm",
-        on_delete=models.CASCADE,
-        related_name="enrollments",
+        "academics.AcademicTerm", on_delete=models.CASCADE, related_name="enrollments",
     )
+    is_active = models.BooleanField(default=True)
 
-    is_active = models.BooleanField(
-        default=True,
-        help_text=_("Indicates the student's current active enrollment."),
-    )
 
     class Meta(auto_prefetch.Model.Meta):
         constraints = [
             models.UniqueConstraint(
-                fields=["student", "session", "term"],
-                name="unique_student_enrollment_per_term",
+                fields=["student", "classroom", "session", "term"],
+                name="unique_student_enrollment",
             ),
         ]
 
@@ -405,15 +302,15 @@ class StudentEnrollment(TimeStampedModel):
         return f"{self.student} - {self.classroom} ({self.session} - {self.term})"
 
 
+# --------------------------
+# Parent Profile
+# --------------------------
 class ParentProfile(BaseProfile):
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="parentprofile",
-    )
     occupation = models.CharField(max_length=100, blank=True, null=True)
     address = models.CharField(max_length=255, blank=True, null=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
+
+    objects = TenantManager()
 
     def __str__(self):
         return f"Parent: {self.user.name or self.user.email}"

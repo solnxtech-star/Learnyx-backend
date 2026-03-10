@@ -8,6 +8,8 @@ from django.db import models
 from django.db.models import QuerySet
 from model_utils import FieldTracker
 
+from core.applications.users.managers import TenantManager
+
 
 def generate_uuid() -> str:
     """Generate a unique 32-character hexadecimal UUID string."""
@@ -133,3 +135,25 @@ class AccountTrackedModel(TimeStampedModel):
 
     class Meta(TimeStampedModel.Meta):
         abstract = True
+
+
+class TenantAwareModel(TimeStampedModel):
+    """
+    Abstract base model scoped to a school (tenant).
+    Provides a `for_school()` helper and tenant-safe default manager.
+    """
+    school = models.ForeignKey(
+        "users.School",
+        on_delete=models.CASCADE,
+        db_index=True,
+        related_name="%(class)ss",
+    )
+    objects: models.Manager = TenantManager()
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def for_school(cls, school):
+        """Return queryset filtered by school."""
+        return cls.objects.for_school(school)

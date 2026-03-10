@@ -38,10 +38,7 @@ from core.applications.users.api.serializers.admin_accessment_serializers import
     DefaultAssessmentPolicySerializer,
 )
 from core.applications.users.api.serializers.admin_grading_serializers import (
-    DefaultGradingSystemSerializer,
-)
-from core.applications.users.api.serializers.admin_grading_serializers import (
-    GradeScaleBulkCreateSerializer,
+    TenantAwareGradeScaleSerializer,
 )
 from core.applications.users.api.serializers.admin_grading_serializers import (
     GradeScaleSerializer,
@@ -1194,123 +1191,194 @@ TeacherViewSetSchema = extend_schema_view(
 )
 
 GRADING_SCHEMA = extend_schema_view(
+    # -------------------- Standard CRUD --------------------
     list=extend_schema(
         tags=["Grade Scales"],
-        summary="List all grade scales for the school",
+        summary="List grade scales",
         description=(
             "Returns all grade scales configured for the authenticated user's school.\n"
-            "Results are ordered by `max_score` (descending) and then by `order`.\n"
-            "Teachers can only view grade scales, while principals/school owners can manage them."
+            "Results are ordered by `order` and `max_score`.\n"
+            "Teachers have read-only access while principals/school owners can manage them."
         ),
         responses={200: GradeScaleSerializer(many=True)},
     ),
+
     retrieve=extend_schema(
         tags=["Grade Scales"],
-        summary="Retrieve a single grade scale",
-        description="Fetch details for a specific grade scale belonging to the authenticated user's school.",
+        summary="Retrieve grade scale",
+        description="Fetch details of a specific grade scale belonging to the authenticated user's school.",
         responses={200: GradeScaleSerializer},
     ),
+
     create=extend_schema(
         tags=["Grade Scales"],
-        summary="Create a grade scale",
+        summary="Create grade scale",
         description=(
-            "Create a new grading scale bound to the authenticated user's school.\n"
-            "**Only principals/school owners** can perform this action."
+            "Create a new grade scale for the authenticated user's school.\n"
+            "Only principals or school owners are allowed to perform this action."
         ),
         request=GradeScaleSerializer,
         responses={201: GradeScaleSerializer},
     ),
+
     update=extend_schema(
         tags=["Grade Scales"],
-        summary="Update a grade scale",
-        description=(
-            "Fully update an existing grade scale.\n"
-            "The `school` field is locked and cannot be changed."
-        ),
+        summary="Update grade scale",
+        description="Fully update an existing grade scale. The `school` field cannot be modified.",
         request=GradeScaleSerializer,
         responses={200: GradeScaleSerializer},
     ),
+
     partial_update=extend_schema(
         tags=["Grade Scales"],
-        summary="Partially update a grade scale",
-        description="Update specific fields on an existing grade scale.",
+        summary="Partially update grade scale",
+        description="Update specific fields of an existing grade scale.",
         request=GradeScaleSerializer,
         responses={200: GradeScaleSerializer},
     ),
+
     destroy=extend_schema(
         tags=["Grade Scales"],
-        summary="Delete a grade scale",
+        summary="Delete grade scale",
         description=(
-            "Soft delete or permanently remove a grade scale. "
-            "Behavior depends on backend policy. Teachers cannot delete scales."
+            "Deletes a grade scale belonging to the authenticated user's school.\n"
+            "Teachers cannot perform this action."
         ),
         responses={204: OpenApiResponse(description="Grade scale deleted")},
     ),
 
+    # -------------------- Bulk Operations --------------------
+    bulk_create=extend_schema(
+        tags=["Grade Scales"],
+        summary="Bulk create or update grade scales",
+        description=(
+            "Create or update multiple grade scales in one request.\n"
+            "Validation rules:\n"
+            "- Full coverage from 0 to 100\n"
+            "- No overlapping score ranges\n"
+            "- Unique grade values\n"
+            "- Valid grade points (0–5)\n"
+            "Operation is atomic (all succeed or all fail)."
+        ),
+        request=TenantAwareGradeScaleSerializer,
+        responses={201: GradeScaleSerializer(many=True)},
+    ),
+
+    apply_default=extend_schema(
+        tags=["Grade Scales"],
+        summary="Apply default grading system",
+        description=(
+            "Apply a predefined grading system such as:\n"
+            "- Standard (A–F)\n"
+            "- Extended (A+–F)\n"
+            "- Nigerian (A1–F9)\n\n"
+            "Existing active grade scales will be replaced automatically."
+        ),
+        request=TenantAwareGradeScaleSerializer,
+        responses={200: GradeScaleSerializer(many=True)},
+    ),
+
+    # -------------------- Status Actions --------------------
+    activate=extend_schema(
+        tags=["Grade Scales"],
+        summary="Activate grade scale",
+        description="Marks a grade scale as active.",
+        responses={200: OpenApiResponse(description="Grade scale activated")},
+    ),
+
+    deactivate=extend_schema(
+        tags=["Grade Scales"],
+        summary="Deactivate grade scale",
+        description="Marks a grade scale as inactive without deleting it.",
+        responses={200: OpenApiResponse(description="Grade scale deactivated")},
+    ),
+
+    reset=extend_schema(
+        tags=["Grade Scales"],
+        summary="Reset grading system",
+        description=(
+            "Deactivates all active grade scales for the school.\n"
+            "This operation does not delete any records."
+        ),
+        responses={200: OpenApiResponse(description="All grade scales deactivated")},
+    ),
+
+    reorder=extend_schema(
+        tags=["Grade Scales"],
+        summary="Reorder grade scales",
+        description=(
+            "Update the display order of grade scales.\n"
+            "Payload format:\n"
+            "`{ \"order\": [id1, id2, id3] }`\n\n"
+            "All IDs must belong to the authenticated user's school."
+        ),
+        request=serializers.DictField(
+            child=serializers.ListField(child=serializers.IntegerField()),
+            help_text="Example: { 'order': [1,2,3] }"
+        ),
+        responses={200: OpenApiResponse(description="Grade scales reordered successfully")},
+    ),
 )
 
 
 GRADE_SCALE_ACTION_SCHEMAS = {
     "bulk_create": extend_schema(
         tags=["Grade Scales"],
-        summary="Bulk create grading scales (atomic)",
+        summary="Bulk create or update grade scales",
         description=(
-            "Allows admins to upload multiple grading scales at once.\n"
-            "- All existing active scales are deactivated.\n"
-            "- The new scales become the active grading system.\n"
-            "- This operation is atomic (all-or-nothing)."
+            "Create or update multiple grade scales in a single request.\n"
+            "Ensures complete score coverage and prevents overlaps."
         ),
-        request=GradeScaleBulkCreateSerializer,
-        responses={201: OpenApiResponse(description="Bulk-created grade scales")},
+        request=TenantAwareGradeScaleSerializer,
+        responses={201: GradeScaleSerializer(many=True)},
     ),
+
     "apply_default": extend_schema(
         tags=["Grade Scales"],
-        summary="Apply a predefined grading system",
+        summary="Apply default grading system",
         description=(
-            "Apply a default grading system (e.g., *standard*, *extended*, *nigerian*).\n"
-            "This resets the current active system and loads the chosen preset."
+            "Loads a predefined grading system (standard, extended, Nigerian).\n"
+            "Existing scales are replaced automatically."
         ),
-        request=DefaultGradingSystemSerializer,
-        responses={200: OpenApiResponse(description="Default grading system applied")},
+        request=TenantAwareGradeScaleSerializer,
+        responses={200: GradeScaleSerializer(many=True)},
     ),
+
     "activate": extend_schema(
         tags=["Grade Scales"],
-        summary="Activate a grade scale",
-        description=(
-            "Marks the grade scale as active. Other scales remain unchanged.\n"
-            "Used when multiple grade scales exist but only some should count."
-        ),
+        summary="Activate grade scale",
+        description="Marks the selected grade scale as active.",
         responses={200: OpenApiResponse(description="Grade scale activated")},
     ),
+
     "deactivate": extend_schema(
         tags=["Grade Scales"],
-        summary="Deactivate a grade scale",
-        description="Marks the grade scale as inactive. Does not delete the record.",
+        summary="Deactivate grade scale",
+        description="Marks the selected grade scale as inactive.",
         responses={200: OpenApiResponse(description="Grade scale deactivated")},
     ),
+
     "reset": extend_schema(
         tags=["Grade Scales"],
         summary="Reset grading system",
-        description=(
-            "Deactivates **all** active grade scales for the school.\n"
-            "This does not delete records — it is a soft reset."
-        ),
-        responses={204: OpenApiResponse(description="Grading system reset")},
+        description="Deactivates all active grade scales for the school.",
+        responses={200: OpenApiResponse(description="All grade scales deactivated")},
     ),
+
     "reorder": extend_schema(
         tags=["Grade Scales"],
         summary="Reorder grade scales",
         description=(
-            "Accepts: `{ order: [ids...] }`\n"
-            "- Order controls how grades show in frontend tables.\n"
-            "- Highest grade should be first.\n"
-            "- IDs must belong to the current school."
+            "Controls how grade scales appear in the UI.\n"
+            "Payload example:\n"
+            "`{ \"order\": [1,2,3] }`"
         ),
-        request=serializers.ListField(child=serializers.IntegerField()),
-        responses={200: OpenApiResponse(description="Grades reordered successfully")},
+        request=serializers.DictField(
+            child=serializers.ListField(child=serializers.IntegerField())
+        ),
+        responses={200: OpenApiResponse(description="Grade scales reordered successfully")},
     ),
 }
-
 
 
 AssessmentPolicySchema = extend_schema_view(

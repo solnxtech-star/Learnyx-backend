@@ -8,7 +8,7 @@ from django.utils.translation import gettext_lazy as _
 
 from core.applications.academics.models import AcademicTerm
 from core.applications.academics.models import AssessmentRecord
-from core.helper.models import TimeStampedModel
+from core.helper.models import TenantAwareModel, TimeStampedModel
 
 # Create your models here.
 
@@ -203,12 +203,10 @@ class TermReportSummary(TimeStampedModel):
 
 
 
-class GradeScale(TimeStampedModel):
+class GradeScale(TenantAwareModel):
     """
     Defines grade brackets for a school (e.g., A = 75-100).
     """
-
-    school = auto_prefetch.ForeignKey("users.School", on_delete=models.CASCADE)
 
     term = auto_prefetch.ForeignKey(
         "academics.AcademicTerm",
@@ -287,3 +285,8 @@ class GradeScale(TimeStampedModel):
                 name="point_between_0_and_5",
             ),
         ]
+
+    @classmethod
+    def active_for_school(cls, school):
+        """Return only active grade scales for the given school."""
+        return cls.objects.for_school(school).filter(is_active=True)

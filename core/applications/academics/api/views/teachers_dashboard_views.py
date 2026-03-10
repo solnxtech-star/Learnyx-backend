@@ -1,8 +1,10 @@
 import logging
+
+from django.db import transaction
+from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
-from core.applications.academics.services.teacher_student_service import TeacherStudentService
-from core.applications.users.api.serializers.admin_accessment_serializers import AssessmentTypeSerializer
 from drf_spectacular.utils import extend_schema
+from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -10,14 +12,15 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-logger = logging.getLogger(__name__)
-
 from core.applications.academics.api.schemas import teachers_dashboard
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     AssessmentEntryCreateSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     AssessmentEntrySerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    BulkAssessmentEntrySerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     ClassroomStudentSerializer,
@@ -51,8 +54,16 @@ from core.applications.academics.models import AcademicTerm
 from core.applications.academics.models import AssessmentRecord
 from core.applications.academics.models import AssessmentType
 from core.applications.academics.models import ClassRoom
+from core.applications.academics.models import StudentClassAssignment
+from core.applications.academics.models import StudentSubjectEnrollment
 from core.applications.academics.models import TeachingAssignment
+from core.applications.academics.services.teacher_student_service import (
+    TeacherStudentService,
+)
 from core.applications.grading.models import SubjectResult
+from core.applications.users.api.serializers.admin_accessment_serializers import (
+    AssessmentTypeSerializer,
+)
 from core.applications.users.models import StudentContact
 from core.applications.users.models import StudentProfile
 from core.applications.users.models import TeacherProfile
@@ -60,6 +71,7 @@ from core.helper.mixins import CurrentAcademicContextMixin
 from core.helper.permissions import IsSchoolAdminOrAssignedTeacher
 from core.helper.service import compute_subject_result
 
+logger = logging.getLogger(__name__)
 
 @extend_schema(tags=["Teacher Dashboard"])
 @teachers_dashboard
@@ -225,31 +237,34 @@ class TeacherDashboardViewSet(
         """
         teacher = self._get_teacher(request.user)
 
-        # Get teaching assignments (single source of truth)
+        # Teacher's teaching assignments
         assignments = TeachingAssignment.objects.filter(
             teacher=teacher
         ).select_related("classroom", "subject")
 
-        classroom_ids = assignments.values_list("classroom_id", flat=True)
-        subject_ids = assignments.values_list("subject_id", flat=True)
+        classroom_ids = list(assignments.values_list("classroom_id", flat=True))
+        subject_ids = list(assignments.values_list("subject_id", flat=True))
 
-        # Students in those classrooms enrolled in those subjects
-        students_qs = (
-            StudentProfile.objects
-            .filter(
-                classroom_id__in=classroom_ids,
-                subject_enrollments__subject_id__in=subject_ids,
+        # Students in those classrooms AND currently active
+        students_qs = StudentProfile.objects.filter(
+            class_assignments__classroom_id__in=classroom_ids,
+            class_assignments__is_active=True,
+            subject_enrollments__subject_id__in=subject_ids,
+        ).distinct().select_related("user").prefetch_related(
+            Prefetch(
+                "subject_enrollments",
+                queryset=StudentSubjectEnrollment.objects.select_related("subject")
+            ),
+            Prefetch(
+                "class_assignments",
+                queryset=StudentClassAssignment.objects.select_related("classroom").filter(is_active=True)
             )
-            .distinct()
-            .select_related("user", "classroom")
         )
 
         serializer = StudentSubjectMatchSerializer(
             students_qs,
             many=True,
-            context={
-                "teacher_subject_ids": list(subject_ids),
-            },
+            context={"teacher_subject_ids": subject_ids}
         )
 
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -356,26 +371,17 @@ class TeacherDashboardViewSet(
 
 
 
-    # ------------------------------------------------------------------
-    # ASSESSMENT ENTRY (WRITE)
-    # ------------------------------------------------------------------
+    # -----------------------------
+    # Single Assessment Entry Endpoint
+    # -----------------------------
     @action(detail=False, methods=["post"], url_path="assessments/enter")
     def enter_assessment(self, request):
         """
-        Create an assessment entry for a student.
-
-        Flow:
-        1. Authorize teacher (classroom + subject via TeachingAssignment)
-        2. Validate assessment rules
-        3. Persist assessment record
-        4. Compute subject result immediately
+        Create a single assessment entry for a student.
         """
-
         teacher = self._get_teacher(request.user)
 
-        # ------------------------------
         # Step 1: Validate incoming payload
-        # ------------------------------
         serializer = AssessmentEntryCreateSerializer(
             data=request.data,
             context={"request": request},
@@ -385,11 +391,7 @@ class TeacherDashboardViewSet(
         student = serializer.validated_data["student"]
         subject = serializer.validated_data["subject"]
 
-        # ------------------------------
         # Step 2: Teacher authorization
-        # ------------------------------
-
-        # Classroom check
         if not teacher.classrooms.filter(id=student.classroom_id).exists():
             logger.warning(
                 "Unauthorized assessment entry attempt (classroom)",
@@ -401,7 +403,6 @@ class TeacherDashboardViewSet(
             )
             raise PermissionDenied("You are not assigned to this classroom.")
 
-        # Subject + Classroom check using TeachingAssignment
         if not TeachingAssignment.objects.filter(
             teacher=teacher,
             classroom_id=student.classroom_id,
@@ -420,14 +421,10 @@ class TeacherDashboardViewSet(
                 "You are not assigned to teach this subject in this classroom."
             )
 
-        # ------------------------------
         # Step 3: Persist assessment record
-        # ------------------------------
         record = serializer.save()
 
-        # ------------------------------
         # Step 4: Compute subject results synchronously
-        # ------------------------------
         term = self._get_term_from_assessment(record.assessment_type)
         compute_subject_result(
             student=record.student,
@@ -445,11 +442,109 @@ class TeacherDashboardViewSet(
             },
         )
 
-        # ------------------------------
         # Step 5: Return serialized response
-        # ------------------------------
         return Response(
             AssessmentEntrySerializer(record).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    # -----------------------------
+    # Bulk Assessment Entry Endpoint
+    # -----------------------------
+    @action(detail=False, methods=["post"], url_path="assessments/enter-bulk")
+    def enter_bulk_assessments(self, request):
+        """
+        Create multiple assessment entries in bulk.
+
+        Flow:
+        1. Validate payload via serializer
+        2. Authorize teacher (classroom + subject)
+        3. Persist records in a single transaction
+        4. Compute subject results immediately
+        """
+
+        teacher = self._get_teacher(request.user)
+
+        serializer = BulkAssessmentEntrySerializer(
+            data=request.data,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        entries = serializer.validated_data["entries"]
+        subject = serializer.validated_data["subject"]  # Already a model instance
+
+        created_records = []
+
+        # ✅ No need for in_bulk lookups — DRF already gave model instances
+        with transaction.atomic():
+
+            for entry in entries:
+                student = entry["student"]
+                assessment_type = entry["assessment_type"]
+                score = entry["score"]
+
+                # --------------------------------------------------
+                # Step 1: Teacher Authorization
+                # --------------------------------------------------
+                if not teacher.classrooms.filter(id=student.classroom_id).exists():
+                    raise PermissionDenied(
+                        f"You are not assigned to {student.user.name}'s classroom."
+                    )
+
+                if not TeachingAssignment.objects.filter(
+                    teacher=teacher,
+                    classroom_id=student.classroom_id,
+                    subject_id=subject.id,
+                ).exists():
+                    raise PermissionDenied(
+                        f"You are not assigned to teach {subject.name} "
+                        f"in {student.user.name}'s classroom."
+                    )
+
+                # --------------------------------------------------
+                # Step 2: Validation (reuse mixin logic)
+                # --------------------------------------------------
+                serializer.validate_student_subject_term(student, subject, assessment_type)
+                serializer.validate_score(student, subject, assessment_type, score)
+
+                # --------------------------------------------------
+                # Step 3: Persist Record
+                # --------------------------------------------------
+                record = AssessmentRecord.objects.create(
+                    student=student,
+                    classroom_subject=subject,
+                    assessment_type=assessment_type,
+                    score=score,
+                    index=serializer.get_next_index(student, subject, assessment_type),
+                )
+
+                created_records.append(record)
+
+                logger.info(
+                    "Bulk assessment record created",
+                    extra={
+                        "record_id": record.id,
+                        "student_id": student.id,
+                        "subject_id": subject.id,
+                        "assessment_type_id": assessment_type.id,
+                        "teacher_id": teacher.id,
+                    },
+                )
+
+                # --------------------------------------------------
+                # Step 4: Compute Subject Result
+                # --------------------------------------------------
+                term = self._get_term_from_assessment(assessment_type)
+
+                compute_subject_result(
+                    student=student,
+                    classroom_subject=subject,
+                    term=term,
+                )
+
+        return Response(
+            AssessmentEntrySerializer(created_records, many=True).data,
             status=status.HTTP_201_CREATED,
         )
     # ------------------------------------------------------------------

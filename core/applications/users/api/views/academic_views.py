@@ -1,18 +1,26 @@
+from datetime import datetime
+from datetime import timedelta
+
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+from django.utils.translation import gettext_lazy as _
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters
+from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.applications.academics.models import AcademicSession
 from core.applications.academics.models import AcademicTerm
 from core.applications.academics.models import Subject
+from core.applications.academics.models import TermPeriod
 from core.applications.users.api.schemas import ACADEMIC_SESSION_SCHEMA
 from core.applications.users.api.schemas import ACADEMIC_TERM_SCHEMA
 from core.applications.users.api.schemas import SUBJECT_SCHEMA
@@ -25,6 +33,9 @@ from core.applications.users.api.serializers.academic_section_serializers import
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     AdminAssignClassroomsAndSubjectsSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
+    BulkAcademicTermSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     CloseAcademicSessionSerializer,
@@ -51,13 +62,13 @@ from core.applications.users.permissions import IsPrincipalOrSchoolOwner
 @ACADEMIC_SESSION_SCHEMA
 class AcademicSessionViewSet(viewsets.ModelViewSet):
     """
-    Enterprise-grade ViewSet for managing Academic Sessions.
+    Tenant-aware, enterprise-grade ViewSet for managing Academic Sessions.
 
     Design Principles:
-    - School context is derived from authenticated user.
-    - List endpoint returns only active sessions by default.
-    - Soft delete deactivates session (does not remove record).
-    - Activation/deactivation rules are delegated to serializers.
+    - Only sessions for the authenticated user's school (tenant) are accessible.
+    - List endpoint supports filtering by active status and date ranges.
+    - Soft delete deactivates session instead of removing it.
+    - Activation/deactivation logic is delegated to serializers.
     - Expired sessions cannot be opened.
     """
 
@@ -69,16 +80,31 @@ class AcademicSessionViewSet(viewsets.ModelViewSet):
     # -----------------------------------------------------
     def get_queryset(self):
         """
-        Restrict sessions strictly to the authenticated user's school.
-        By default, only active sessions are returned on list.
+        Return sessions strictly for the authenticated user's school.
+        Supports optional filtering:
+        - active_only: boolean query param to filter active sessions
+        - start_date / end_date: date range filters
         """
-        queryset = AcademicSession.objects.filter(
-            school=self.request.user.school
-        ).order_by("-start_date")
+        school = getattr(self.request.user, "school", None)
+        if not school:
+            return AcademicSession.objects.none()  # Prevent cross-tenant access
 
-        # Only active sessions for list view
+        queryset = AcademicSession.objects.for_school(school).order_by("-start_date")
+
+        # Tenant-aware filters for list
         if self.action == "list":
-            queryset = queryset.filter(is_active=True)
+            # Filter by 'active_only' query param (default True)
+            active_only = self.request.query_params.get("active_only", "true").lower()
+            if active_only in ("true", "1"):
+                queryset = queryset.filter(is_active=True)
+
+            # Optional date range filtering
+            start_date = self.request.query_params.get("start_date")
+            end_date = self.request.query_params.get("end_date")
+            if start_date:
+                queryset = queryset.filter(start_date__gte=start_date)
+            if end_date:
+                queryset = queryset.filter(end_date__lte=end_date)
 
         return queryset
 
@@ -87,17 +113,21 @@ class AcademicSessionViewSet(viewsets.ModelViewSet):
     # -----------------------------------------------------
     def perform_create(self, serializer):
         """
-        School is securely injected inside the serializer.
+        Inject school (tenant) into the serializer.
+        Tenant-aware serializers handle uniqueness and active session rules.
         """
-        serializer.save()
+        school = getattr(self.request.user, "school", None)
+        if not school:
+            raise serializers.ValidationError(_("Authenticated user must belong to a school."))
+        serializer.save(school=school)
 
     # -----------------------------------------------------
     # SOFT DELETE
     # -----------------------------------------------------
     def perform_destroy(self, instance):
         """
-        Soft delete by deactivating session.
-        Historical records are preserved.
+        Soft delete by deactivating the session.
+        Ensures tenant isolation.
         """
         if instance.is_active:
             instance.is_active = False
@@ -106,6 +136,23 @@ class AcademicSessionViewSet(viewsets.ModelViewSet):
     # -----------------------------------------------------
     # OPEN SESSION
     # -----------------------------------------------------
+    def _get_tenant_session(self, pk):
+        """
+        Fetch a session by ID ensuring it belongs to the authenticated user's school.
+        Raises 404 if not found, 403 if cross-tenant access is attempted.
+        """
+        school = getattr(self.request.user, "school", None)
+        try:
+            session = AcademicSession.objects.get(pk=pk)
+        except AcademicSession.DoesNotExist:
+            raise NotFound(_("Academic session not found."))
+
+        if not school or session.school != school:
+            raise PermissionDenied(_("You cannot access a session for another school."))
+
+        return session
+
+
     @action(detail=True, methods=["post"], url_path="open")
     @transaction.atomic
     def open_session(self, request, pk=None):
@@ -114,43 +161,48 @@ class AcademicSessionViewSet(viewsets.ModelViewSet):
 
         Rules:
         - Cannot open a session that has already ended.
-        - Activation logic (deactivating others) is handled
-          by the OpenAcademicSessionSerializer.
+        - Tenant-aware: only sessions belonging to the user's school.
+        - Automatically deactivates other sessions for the same school.
         """
-        session = self.get_object()
+        session = self._get_tenant_session(pk)
 
         today = timezone.now().date()
-
         if session.end_date and session.end_date < today:
             return Response(
-                {"detail": "Cannot open a session that has already ended."},
+                {"detail": _("Cannot open a session that has already ended.")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        serializer = OpenAcademicSessionSerializer()
+        serializer = OpenAcademicSessionSerializer(
+            instance=session, context={"request": request}
+        )
         serializer.update(session, {})
 
         return Response(
-            {"detail": "Academic session opened successfully."},
+            {"detail": _("Academic session opened successfully.")},
             status=status.HTTP_200_OK,
         )
 
-    # -----------------------------------------------------
-    # CLOSE SESSION
-    # -----------------------------------------------------
+
     @action(detail=True, methods=["post"], url_path="close")
     @transaction.atomic
     def close_session(self, request, pk=None):
         """
         Deactivate a session.
-        """
-        session = self.get_object()
 
-        serializer = CloseAcademicSessionSerializer()
+        Rules:
+        - Tenant-aware: only sessions belonging to the user's school.
+        - Cannot close an already inactive session.
+        """
+        session = self._get_tenant_session(pk)
+
+        serializer = CloseAcademicSessionSerializer(
+            instance=session, context={"request": request}
+        )
         serializer.update(session, {})
 
         return Response(
-            {"detail": "Academic session closed successfully."},
+            {"detail": _("Academic session closed successfully.")},
             status=status.HTTP_200_OK,
         )
 
@@ -160,203 +212,201 @@ class AcademicSessionViewSet(viewsets.ModelViewSet):
 @ACADEMIC_TERM_SCHEMA
 class AcademicTermViewSet(viewsets.ModelViewSet):
     """
-    Professionally aligned ViewSet for Academic Terms.
+    Tenant-aware ViewSet for managing Academic Terms.
 
-    Responsibilities:
-    - Scoped to user's school
-    - Manages academic terms lifecycle
-    - Explicit control of score entry state (open/close)
+    Features:
+    - Multi-tenant safe (scoped to authenticated user's school)
+    - CRUD operations for terms
+    - Bulk creation of terms within a session
+    - Open / Close score entry
+    - Enforces single active term per session
     """
 
     serializer_class = AcademicTermSerializer
     permission_classes = [IsAuthenticated, IsPrincipalOrSchoolOwner]
 
+    # ---------------------------------------------------------
+    # Queryset
+    # ---------------------------------------------------------
     def get_queryset(self):
-        queryset = AcademicTerm.objects.filter(
-            session__school=self.request.user.school,
-        )
+        """
+        Returns tenant-scoped queryset, optionally filtered by session_id.
+        """
+        school = self.request.user.school
+        queryset = AcademicTerm.objects.for_school(school).select_related("session").order_by("term_number")
+
         session_id = self.request.query_params.get("session_id")
         if session_id:
             queryset = queryset.filter(session_id=session_id)
+
         return queryset
 
+    # ---------------------------------------------------------
+    # CRUD Operations
+    # ---------------------------------------------------------
     def perform_create(self, serializer):
+        """Delegate creation to serializer (handles tenant & activation logic)."""
         serializer.save()
 
+    def perform_destroy(self, instance):
+        """Soft-delete a term by deactivating it."""
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])
+
+    # ---------------------------------------------------------
+    # Bulk Create Terms
+    # ---------------------------------------------------------
     @action(detail=False, methods=["post"], url_path="bulk-create")
     @transaction.atomic
     def bulk_create(self, request):
         """
-        Creates multiple terms within a session in a single atomic operation.
+        Bulk create academic terms with tenant safety.
+        Automatically generates First Half / Second Half TermPeriods.
 
-        Expected payload:
-        {
-            "session": 1,
-            "terms": [
-                {"term_number": 1, "start_date": "2026-01-10",
-                "end_date": "2026-04-05", "is_active": true
-                },
-                ...
-            ]
-        }
-
-        Business Rules:
-        - Session must exist and belong to the user's school
-        - Session must be active
-        - Only one term can be active at a time (including existing terms)
-        - start_date must be before end_date
-        - term_number must be positive
-        - Duplicate term_numbers in the same session are not allowed
-        - term_type is automatically set based on term_number
+        Steps:
+        1. Validate request payload.
+        2. Convert string dates to datetime.date objects.
+        3. Create AcademicTerm objects for the tenant school.
+        4. Automatically generate TermPeriods for each term.
         """
-        session_id = request.data.get("session")
-        terms_data = request.data.get("terms", [])
+        serializer = BulkAcademicTermSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
 
-        if not session_id or not terms_data:
-            return Response(
-                {"errors": "Session and terms are required."},
-                status=status.HTTP_400_BAD_REQUEST,
+        school = request.user.school
+        session = serializer.validated_data["session"]
+        terms_data = serializer.validated_data["terms"]
+
+        term_objects = []
+
+        # -----------------------
+        # Build AcademicTerm objects
+        # -----------------------
+        for term_data in terms_data:
+            term_number = term_data["term_number"]
+
+            # Convert string dates to datetime.date
+            try:
+                start_date = datetime.strptime(term_data["start_date"], "%Y-%m-%d").date()
+                end_date = datetime.strptime(term_data["end_date"], "%Y-%m-%d").date()
+            except ValueError:
+                raise serializers.ValidationError(_("Invalid date format. Use YYYY-MM-DD."))
+
+            if start_date > end_date:
+                raise serializers.ValidationError(_("start_date cannot be after end_date."))
+
+            term_type = term_data.get("term_type") or AcademicTermSerializer()._determine_term_type(term_number)
+
+            term_objects.append(
+                AcademicTerm(
+                    school=school,
+                    session=session,
+                    term_number=term_number,
+                    start_date=start_date,
+                    end_date=end_date,
+                    is_active=term_data.get("is_active", False),
+                    term_type=term_type,
+                )
             )
 
-        session = get_object_or_404(
-            AcademicSession, id=session_id, school=request.user.school,
+        # Bulk create terms
+        created_terms = AcademicTerm.objects.bulk_create(term_objects)
+
+        # -----------------------
+        # Automatically generate TermPeriods
+        # -----------------------
+        period_objects = []
+        for term in created_terms:
+            start_date = term.start_date
+            end_date = term.end_date
+
+            # Midpoint calculation
+            mid_date = start_date + (end_date - start_date) // 2
+
+            period_objects.extend([
+                TermPeriod(
+                    school=school,
+                    term=term,
+                    name="First Half",
+                    period_type=TermPeriod.PeriodType.HALF_TERM,
+                    start_date=start_date,
+                    end_date=mid_date,
+                ),
+                TermPeriod(
+                    school=school,
+                    term=term,
+                    name="Second Half",
+                    period_type=TermPeriod.PeriodType.HALF_TERM,
+                    start_date=mid_date + timedelta(days=1),
+                    end_date=end_date,
+                )
+            ])
+
+        TermPeriod.objects.bulk_create(period_objects)
+
+        return Response(
+            {"detail": f"{len(created_terms)} terms created successfully."},
+            status=status.HTTP_201_CREATED
         )
 
-        if not session.is_active:
-            return Response(
-                {"errors": "Cannot create terms under inactive session."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Prevent multiple active terms
-        existing_active = session.terms.filter(is_active=True).exists()
-        new_active_count = sum(1 for t in terms_data if t.get("is_active"))
-        if new_active_count > 1 or (existing_active and new_active_count):
-            return Response(
-                {"errors": "Only one term can be active at a time."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Prevent duplicate term_numbers in the same session
-        existing_numbers = set(session.terms.values_list("term_number", flat=True))
-        incoming_numbers = [t.get("term_number") for t in terms_data]
-        if any(num in existing_numbers for num in incoming_numbers):
-            return Response(
-                {"errors": "Duplicate term_number detected for this session."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Determine term_type automatically
-        def get_term_type(term_number: int) -> str:
-            if term_number in (1, 2):
-                return "HALF_TERM"
-            elif term_number == 3:
-                return "END_OF_TERM"
-            return "FULL_TERM"
-
-        # Validate and prepare terms
-        validated_terms = []
-        for idx, term in enumerate(terms_data, start=1):
-            try:
-                term_number = int(term.get("term_number"))
-                if term_number < 1:
-                    raise ValueError("term_number must be a positive integer")
-
-                start_date = parse_date(term.get("start_date"))
-                end_date = parse_date(term.get("end_date"))
-                if not start_date or not end_date:
-                    raise ValueError("start_date and end_date must be valid dates")
-                if start_date > end_date:
-                    raise ValueError("start_date cannot be after end_date")
-
-                is_active = bool(term.get("is_active", False))
-                term_type = get_term_type(term_number)
-
-                validated_terms.append(
-                    AcademicTerm(
-                        session=session,
-                        term_number=term_number,
-                        start_date=start_date,
-                        end_date=end_date,
-                        is_active=is_active,
-                        term_type=term_type,
-                    )
-                )
-            except ValueError as e:
-                return Response({"errors": f"Term {idx}: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Bulk insert
-        AcademicTerm.objects.bulk_create(validated_terms)
-
-        response_data = [
-            {"id": t.id, "term_number": t.term_number, "start_date": t.start_date, "end_date": t.end_date,
-             "is_active": t.is_active, "term_type": t.term_type, "name": t.name}
-            for t in validated_terms
-        ]
-
-        return Response(response_data, status=status.HTTP_201_CREATED)
-
-    def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
+    # ---------------------------------------------------------
+    # Open / Close Score Entry
+    # ---------------------------------------------------------
+    def _check_tenant(self, term):
+        """Helper to validate term belongs to current user's school."""
+        if term.school != self.request.user.school:
+            raise serializers.ValidationError(_("Cross-school access denied."))
 
     @action(detail=True, methods=["post"], url_path="open-score-entry")
     @transaction.atomic
     def open_score_entry(self, request, pk=None):
-        """
-        Opens a term for score entry.
-
-        Business Rules:
-        - Only one term per session can be open at a time
-        - Session must be active
-        """
+        """Open a term for score entry, deactivating other active terms in the session."""
         term = self.get_object()
-        session = term.session
+        self._check_tenant(term)
 
-        if not session.is_active:
-            return Response(
-                {"detail": "Cannot open score entry for an inactive session."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if not term.session.is_active:
+            return Response({"detail": _("Cannot open score entry for an inactive session.")},
+                            status=status.HTTP_400_BAD_REQUEST)
 
-        # Close other active terms
-        AcademicTerm.objects.filter(
-            session=session, is_active=True
-        ).exclude(pk=term.pk).update(is_active=False)
+        # Deactivate other active terms
+        AcademicTerm.objects.for_school(request.user.school) \
+            .filter(session=term.session, is_active=True) \
+            .exclude(pk=term.pk) \
+            .update(is_active=False)
 
         term.is_active = True
         term.save(update_fields=["is_active"])
 
         return Response(
-            {"detail": f"{term.name} is now open for score entry.",
-             "term_id": term.id, "is_active": term.is_active},
-            status=status.HTTP_200_OK,
+            {
+                "detail": f"{term.name} is now open for score entry.",
+                "term_id": term.id,
+                "is_active": True
+            },
+            status=status.HTTP_200_OK
         )
 
     @action(detail=True, methods=["post"], url_path="close-score-entry")
     @transaction.atomic
     def close_score_entry(self, request, pk=None):
-        """
-        Closes a term for score entry.
-        """
+        """Close score entry for a term."""
         term = self.get_object()
+        self._check_tenant(term)
 
         if not term.is_active:
-            return Response(
-                {"detail": "This term is already closed for score entry."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": _("This term is already closed.")},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         term.is_active = False
         term.save(update_fields=["is_active"])
 
         return Response(
-            {"detail": f"{term.name} has been closed for score entry.",
-             "term_id": term.id, "is_active": term.is_active},
-            status=status.HTTP_200_OK,
+            {
+                "detail": f"{term.name} is now closed for score entry.",
+                "term_id": term.id,
+                "is_active": False
+            },
+            status=status.HTTP_200_OK
         )
-
-
 # ============================================================================
 # Subject ViewSet
 # ============================================================================
@@ -365,12 +415,16 @@ class AcademicTermViewSet(viewsets.ModelViewSet):
 @SUBJECT_SCHEMA
 class SubjectViewSet(viewsets.ModelViewSet):
     """
-    Professionally aligned ViewSet for Subjects.
+    Tenant-aware CRUD operations for Subjects.
 
-    Alignment with Serializer:
-    - School is enforced during save.
+    Access:
+    - Only School Owners and Principals can manage subjects.
+
+    Features:
+    - Automatically assigns the authenticated user's school.
     - Classroom ownership is validated by serializer.
-    - Supports safe soft-deletes.
+    - Soft deletes supported (is_active=False).
+    - Searchable by name.
     """
 
     serializer_class = SubjectSerializer
@@ -379,13 +433,38 @@ class SubjectViewSet(viewsets.ModelViewSet):
     search_fields = ["name"]
 
     def get_queryset(self):
-        # Only return subjects belonging to this school
-        return Subject.objects.filter(school=self.request.user.school)
+        """
+        Return subjects scoped to the authenticated user's school.
+        Only active subjects are returned by default.
+        """
+        school = getattr(self.request.user, "school", None)
+        if not school:
+            return Subject.objects.none()
 
+        # Tenant-aware queryset, only active subjects
+        return Subject.objects.for_school(school).filter(is_active=True).prefetch_related(
+            "class_rooms", "class_rooms__form_teacher__user",
+        )
+
+    @transaction.atomic
     def perform_create(self, serializer):
+        """
+        Assign the current user's school automatically.
+        """
+        serializer.save(school=self.request.user.school)
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        """
+        Update subject within the tenant scope.
+        """
         serializer.save()
 
+    @transaction.atomic
     def perform_destroy(self, instance):
+        """
+        Soft-delete: mark the subject inactive instead of deleting.
+        """
         instance.is_active = False
         instance.save(update_fields=["is_active"])
 

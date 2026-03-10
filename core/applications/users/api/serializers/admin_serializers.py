@@ -184,25 +184,27 @@ class ClassRoomCreateSerializer(serializers.ModelSerializer):
     """
     Serializer for creating and updating classrooms.
 
-    - School is auto-assigned from the authenticated admin.
-    - Academic track (Science / Arts / Commercial) is explicitly selected.
-    - Optional form_teacher can be assigned.
+    Features:
+    - Automatically assigns the authenticated user's school.
+    - Ensures academic_class + arm + track is unique within the school.
+    - Optional assignment of a form_teacher who must belong to the same school.
     """
 
     academic_class = serializers.ChoiceField(
         choices=AcademicClass.choices,
+        help_text=_("Parent academic class, e.g., JSS1, SS2"),
     )
 
     track = serializers.ChoiceField(
         choices=AcademicTrack.choices,
-        help_text="Academic track for the classroom (Science, Arts, Commercial)",
+        help_text=_("Academic track for the classroom (Science, Arts, Commercial)"),
     )
 
     form_teacher = serializers.PrimaryKeyRelatedField(
         queryset=TeacherProfile.objects.all(),
         required=False,
         allow_null=True,
-        help_text="Optional: Assign a teacher as the form teacher",
+        help_text=_("Optional: Assign a teacher as the form teacher"),
     )
 
     class Meta:
@@ -214,95 +216,61 @@ class ClassRoomCreateSerializer(serializers.ModelSerializer):
         }
 
     def validate(self, attrs):
+        """Ensure school-scoped uniqueness and valid form_teacher."""
         request = self.context["request"]
         school = getattr(request.user, "school", None)
-
         if not school:
-            raise serializers.ValidationError(
-                _("User does not belong to any school.")
-            )
+            raise serializers.ValidationError(_("User does not belong to any school."))
 
-        # For updates, include existing instance values
-        academic_class = attrs.get(
-            "academic_class",
-            getattr(self.instance, "academic_class", None),
-        )
-        arm = attrs.get(
-            "arm",
-            getattr(self.instance, "arm", None),
-        )
-        track = attrs.get(
-            "track",
-            getattr(self.instance, "track", None),
-        )
+        # Use existing instance values if fields are not provided (for updates)
+        academic_class = attrs.get("academic_class", getattr(self.instance, "academic_class", None))
+        arm = attrs.get("arm", getattr(self.instance, "arm", None))
+        track = attrs.get("track", getattr(self.instance, "track", None))
 
-        # Enforce school-level uniqueness (exclude self on update)
-        queryset = ClassRoom.objects.filter(
-            school=school,
-            academic_class=academic_class,
-            arm=arm,
-            track=track,
-        )
-
+        # Check uniqueness within school
+        qs = ClassRoom.objects.filter(school=school, academic_class=academic_class, arm=arm, track=track)
         if self.instance:
-            queryset = queryset.exclude(pk=self.instance.pk)
-
-        if queryset.exists():
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
             raise serializers.ValidationError(
-                f"{academic_class} {arm} ({track}) already exists."
+                f"{academic_class} {arm} ({track}) already exists in this school."
             )
 
-        # Validate form_teacher belongs to same school
+        # Validate that form_teacher belongs to the same school
         form_teacher = attrs.get("form_teacher")
         if form_teacher and form_teacher.user.school != school:
-            raise serializers.ValidationError(
-                _("Form teacher must belong to the same school.")
-            )
+            raise serializers.ValidationError(_("Form teacher must belong to the same school."))
 
         return attrs
 
     def create(self, validated_data):
-        school = self.context["request"].user.school
-        return ClassRoom.objects.create(
-            school=school,
-            **validated_data,
-        )
+        """Auto-assign the school when creating a classroom."""
+        validated_data["school"] = self.context["request"].user.school
+        return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        """
-        Explicit update for clarity and control.
-        """
+        """Explicit update for clarity and control."""
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-
         instance.save()
         return instance
 
 
 class ClassRoomSerializer(serializers.ModelSerializer):
     """
-    Read serializer for listing and retrieving classrooms.
-    Includes counts for subjects and students based on active assignments.
+    Serializer for listing and retrieving classrooms.
+
+    Includes:
+    - Human-readable class and track display.
+    - Total subjects and students in the classroom for the active session.
+    - Form teacher's name.
     """
 
-    class_display = serializers.CharField(
-        source="get_academic_class_display",
-        read_only=True,
-    )
-
-    track_display = serializers.CharField(
-        source="get_track_display",
-        read_only=True,
-    )
-
+    class_display = serializers.CharField(source="get_academic_class_display", read_only=True)
+    track_display = serializers.CharField(source="get_track_display", read_only=True)
+    form_teacher_name = serializers.CharField(source="form_teacher.user.name", read_only=True)
     total_subjects = serializers.SerializerMethodField()
     total_students = serializers.SerializerMethodField()
-
-    # Optional: show form_teacher info
-    form_teacher_name = serializers.CharField(
-        source="form_teacher.user.name",
-        read_only=True,
-    )
 
     class Meta:
         model = ClassRoom
@@ -321,28 +289,17 @@ class ClassRoomSerializer(serializers.ModelSerializer):
         ]
 
     def get_total_subjects(self, obj):
-        """
-        Returns the total number of active subjects assigned to this classroom.
-        """
+        """Return count of active subjects assigned to the classroom."""
         return obj.subjects.filter(is_active=True).count()
 
     def get_total_students(self, obj):
-        """
-        Returns the total number of students currently assigned to this classroom
-        for the active academic session.
-        """
-
-        # Get active session for this school
-        active_session = AcademicSession.objects.filter(
-            school=obj.school, is_active=True,
-        ).first()
-
+        """Return count of active students in the classroom for the current academic session."""
+        active_session = AcademicSession.objects.filter(school=obj.school, is_active=True).first()
         if not active_session:
             return 0
 
-        # Count active assignments for this classroom in the active session
         return StudentClassAssignment.objects.filter(
             classroom=obj,
             academic_session=active_session,
-            is_active=True,
+            is_active=True
         ).count()

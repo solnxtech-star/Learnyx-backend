@@ -32,6 +32,12 @@ from core.applications.academics.api.serializers.accessment_entry_serializers im
 from core.applications.academics.api.serializers.accessment_entry_serializers import (
     StudentListSerializer,
 )
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    StudentPromotionSerializer,
+)
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    StudentUpdateSerializer,
+)
 from core.applications.academics.models import AssessmentRecord
 from core.applications.academics.models import AssessmentType
 from core.applications.academics.models import StudentSubjectEnrollment
@@ -48,6 +54,7 @@ class StudentViewSet(viewsets.ReadOnlyModelViewSet):
     Provides:
         - List students with current classroom
         - Retrieve student with enrollment history
+        - Update student profile (admin only)
         - Admin-only subject assignment per session & term
     """
 
@@ -71,6 +78,8 @@ class StudentViewSet(viewsets.ReadOnlyModelViewSet):
             return StudentListSerializer
         if self.action == "retrieve":
             return StudentDetailSerializer
+        if self.action == "update_profile":
+            return StudentUpdateSerializer
         return StudentDetailSerializer
 
     # ---------------------------------------------------------
@@ -79,6 +88,39 @@ class StudentViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         school = self.request.user.school
         return super().get_queryset().filter(user__school=school)
+
+    # =========================================================
+    # UPDATE → Edit Student Profile
+    # =========================================================
+    @action(
+        methods=["PATCH"],
+        detail=True,
+        url_path="update-profile",
+        permission_classes=[IsAuthenticated, IsPrincipalOrSchoolOwner],
+    )
+    def update_profile(self, request, pk=None):
+        """
+        Update student + nested user information.
+        """
+
+        student = self.get_object()
+
+        serializer = StudentUpdateSerializer(
+            student,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            {
+                "message": "Student profile updated successfully",
+                "student_id": student.id,
+            }
+        )
+
     # =========================================================
     # LIST → Current Classes
     # =========================================================
@@ -92,7 +134,7 @@ class StudentViewSet(viewsets.ReadOnlyModelViewSet):
         """
         List students with their current academic class and classroom.
         """
-        queryset = self.get_queryset().select_related("user", "classroom")
+        queryset = self.get_queryset()
 
         serializer = StudentCurrentClassSerializer(
             queryset,
@@ -133,6 +175,61 @@ class StudentViewSet(viewsets.ReadOnlyModelViewSet):
             },
         )
 
+    @action(
+        methods=["POST"],
+        detail=False,  # operates on multiple students at once
+        url_path="promote-students",
+        permission_classes=[IsAuthenticated, IsPrincipalOrSchoolOwner],
+    )
+    def promote_students(self, request):
+        """
+        Promote or demote multiple students to a target class and academic session.
+
+        Request example:
+        {
+            "student_ids": [1, 2, 3],
+            "target_class_id": 5,
+            "academic_session_id": 2,
+            "reason": "End-of-year promotion"
+        }
+
+        Response example:
+        {
+            "message": "Students promoted successfully",
+            "promoted_count": 3,
+            "assignments": [
+                {"student_id": 1, "classroom": "Grade 3A", "session": "2025/2026"},
+                ...
+            ]
+        }
+        """
+        serializer = StudentPromotionSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        # Save all promotions in a single atomic transaction
+        assignments = serializer.save()
+
+        # Build response
+        response_data = [
+            {
+                "student_id": a.student_id,
+                "classroom": a.classroom.arm,
+                "session": a.academic_session.name,
+            }
+            for a in assignments
+        ]
+
+        return Response(
+            {
+                "message": "Students promoted successfully",
+                "promoted_count": len(assignments),
+                "assignments": response_data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 # ----------------------------------------
 # CRUD for individual assessment records
