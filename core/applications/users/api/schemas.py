@@ -1,4 +1,3 @@
-from core.applications.users.api.serializers.admin_serializers import ClassRoomCreateSerializer, ClassRoomSerializer
 from drf_spectacular.utils import OpenApiExample
 from drf_spectacular.utils import OpenApiParameter
 from drf_spectacular.utils import OpenApiResponse
@@ -15,16 +14,7 @@ from core.applications.users.api.serializers.academic_section_serializers import
     AcademicTermSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
-    AdminAssignClassroomsSerializer,
-)
-from core.applications.users.api.serializers.academic_section_serializers import (
-    AdminAssignSubjectsSerializer,
-)
-from core.applications.users.api.serializers.academic_section_serializers import (
     SubjectSerializer,
-)
-from core.applications.users.api.serializers.academic_section_serializers import (
-    TeacherCreateTeachingAssignmentsSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherDetailSerializer,
@@ -33,22 +23,31 @@ from core.applications.users.api.serializers.academic_section_serializers import
     TeacherListSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
-    TeacherReassignTeachingAssignmentSerializer,
+    TeacherListWithAssignmentsSerializer,
 )
 from core.applications.users.api.serializers.admin_accessment_serializers import (
-    AssessmentPolicySerializer,
+    AssessmentPolicyCreateSerializer,
+)
+from core.applications.users.api.serializers.admin_accessment_serializers import (
+    AssessmentPolicyListSerializer,
+)
+from core.applications.users.api.serializers.admin_accessment_serializers import (
+    AssessmentPolicyUpdateSerializer,
 )
 from core.applications.users.api.serializers.admin_accessment_serializers import (
     DefaultAssessmentPolicySerializer,
 )
 from core.applications.users.api.serializers.admin_grading_serializers import (
-    DefaultGradingSystemSerializer,
-)
-from core.applications.users.api.serializers.admin_grading_serializers import (
-    GradeScaleBulkCreateSerializer,
+    TenantAwareGradeScaleSerializer,
 )
 from core.applications.users.api.serializers.admin_grading_serializers import (
     GradeScaleSerializer,
+)
+from core.applications.users.api.serializers.admin_serializers import (
+    ClassRoomCreateSerializer,
+)
+from core.applications.users.api.serializers.admin_serializers import (
+    ClassRoomSerializer,
 )
 from core.helper.enums import AdmissionStatus
 
@@ -465,29 +464,56 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
     list=extend_schema(
         summary="List Academic Sessions",
         description="""
-        Returns academic sessions for the authenticated user's school.
+        Returns academic sessions belonging to the authenticated user's school.
 
-        Notes:
-        - Results are scoped to the user's school.
-        - By default this returns all sessions; frontends may filter to `is_active=true`.
+        Behavior:
+        - Results are strictly scoped to the authenticated user's school.
+        - By default, only active sessions may be returned (based on backend configuration).
+        - Sessions are ordered by `start_date` (newest first).
+
+        Response fields:
+        - id
+        - school (UUID)
+        - school_name (string)
+        - name (string, format YYYY/YYYY or YYYY-YYYY)
+        - start_date (YYYY-MM-DD)
+        - end_date (YYYY-MM-DD)
+        - is_active (boolean)
+        - term_count (integer)
+        - created_at (datetime)
+        - updated_at (datetime)
         """,
         tags=["Admin Management"],
-        responses={200: AcademicSessionSerializer(many=True), 401: NOT_FOUND_RESP},
+        responses={
+            200: AcademicSessionSerializer(many=True),
+            401: UNAUTHORIZED_RESP,
+        },
     ),
 
     create=extend_schema(
         summary="Create Academic Session",
         description="""
-        Creates a new academic session.
+        Creates a new academic session for the authenticated user's school.
 
-        Business rules:
-        - Name must follow `YYYY/YYYY` or `YYYY-YYYY`.
+        Required fields:
+        - name
+        - start_date
+        - end_date
+
+        Business Rules:
+        - `name` must follow `YYYY/YYYY` or `YYYY-YYYY`.
+        - Session name must be unique per school.
+        - `end_date` must be strictly after `start_date`.
         - If `is_active=true`, all other sessions in the same school are automatically deactivated.
+        - School is automatically derived from the authenticated user.
+        - Duplicate session names return 400 (not 500).
 
         Example request body:
         ```json
         {
           "name": "2024/2025",
+          "start_date": "2024-09-01",
+          "end_date": "2025-07-31",
           "is_active": true
         }
         ```
@@ -503,19 +529,33 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
 
     retrieve=extend_schema(
         summary="Retrieve Academic Session",
-        description="Fetch a single academic session by ID.",
+        description="""
+        Fetch a single academic session by ID.
+
+        Notes:
+        - Scoped to authenticated user's school.
+        - Returns full session metadata.
+        """,
         tags=["Admin Management"],
-        responses={200: AcademicSessionSerializer, 404: NOT_FOUND_RESP},
+        responses={
+            200: AcademicSessionSerializer,
+            404: NOT_FOUND_RESP,
+        },
     ),
 
     update=extend_schema(
         summary="Update Academic Session",
         description="""
-        Fully update an existing academic session.
+        Fully updates an academic session.
 
-        Notes:
-        - Activation rules apply on update.
-        - Setting `is_active=true` will automatically deactivate other sessions.
+        Business Rules:
+        - Name format validation applies.
+        - Name must remain unique per school.
+        - `end_date` must be after `start_date`.
+        - If `is_active=true`, all other sessions in the same school are automatically deactivated.
+        - School cannot be modified.
+
+        All fields must be provided for PUT.
         """,
         tags=["Admin Management"],
         request=AcademicSessionSerializer,
@@ -528,39 +568,57 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
 
     partial_update=extend_schema(
         summary="Partially Update Academic Session",
+        description="""
+        Partially updates an academic session.
+
+        Business Rules:
+        - Same validation rules as full update.
+        - Partial fields allowed.
+        - If `is_active=true`, other sessions are automatically deactivated.
+        """,
         tags=["Admin Management"],
         request=AcademicSessionSerializer,
-        responses={200: AcademicSessionSerializer, 400: BAD_REQUEST_RESP},
+        responses={
+            200: AcademicSessionSerializer,
+            400: BAD_REQUEST_RESP,
+            404: NOT_FOUND_RESP,
+        },
     ),
 
     destroy=extend_schema(
         summary="Deactivate Academic Session",
         description="""
-        Soft-delete an academic session.
+        Soft-deletes (deactivates) an academic session.
 
-        Notes:
-        - Sets `is_active=false`
-        - Record remains in the database for audit/history purposes.
+        Behavior:
+        - Sets `is_active=false`.
+        - Record remains stored for historical/audit purposes.
+        - Does NOT permanently delete the record.
         """,
         tags=["Admin Management"],
-        responses={204: OpenApiResponse(description="No Content")},
+        responses={
+            204: OpenApiResponse(description="Academic session deactivated successfully."),
+            404: NOT_FOUND_RESP,
+        },
     ),
 
     open_session=extend_schema(
         summary="Open Academic Session",
         description="""
-        Opens an academic session.
+        Activates a session.
 
-        Business rules:
-        - Sets `is_active=true` on the selected session.
-        - Automatically closes all other sessions belonging to the same school.
-        - This endpoint performs a state transition and does not accept a request body.
+        Business Rules:
+        - Sets `is_active=true` for the selected session.
+        - Automatically sets `is_active=false` for all other sessions in the same school.
+        - Cannot open a session whose `end_date` has already passed.
+        - Does not accept a request body.
         """,
         tags=["Admin Management"],
         responses={
             200: OpenApiResponse(
                 description="Academic session opened successfully."
             ),
+            400: BAD_REQUEST_RESP,
             404: NOT_FOUND_RESP,
         },
     ),
@@ -568,12 +626,12 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
     close_session=extend_schema(
         summary="Close Academic Session",
         description="""
-        Closes an academic session.
+        Deactivates a session.
 
-        Business rules:
-        - Sets `is_active=false` on the selected session.
-        - Does not automatically open another session.
-        - This endpoint performs a state transition and does not accept a request body.
+        Business Rules:
+        - Sets `is_active=false` for the selected session.
+        - Does not activate another session automatically.
+        - Does not accept a request body.
         """,
         tags=["Admin Management"],
         responses={
@@ -585,7 +643,6 @@ ACADEMIC_SESSION_SCHEMA = extend_schema_view(
         },
     ),
 )
-
 
 # ============================================================================
 # Academic Term Schema Decorator
@@ -600,7 +657,7 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         - `session_id` (optional): Filter terms belonging to a specific session.
         """,
         parameters=[
-            OpenApiParameter("session_id", str, description="Academic Session ID")
+            OpenApiParameter("session_id", str, description="Academic Session ID", required=False)
         ],
         tags=["Admin Management"],
         responses={200: AcademicTermSerializer(many=True)},
@@ -630,15 +687,15 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         request=AcademicTermSerializer,
         responses={
             201: AcademicTermSerializer,
-            400: BAD_REQUEST_RESP,
-            404: NOT_FOUND_RESP,
+            400: "Bad Request",
+            404: "Not Found",
         },
     ),
 
     retrieve=extend_schema(
         summary="Retrieve Academic Term",
         tags=["Admin Management"],
-        responses={200: AcademicTermSerializer, 404: NOT_FOUND_RESP},
+        responses={200: AcademicTermSerializer, 404: "Not Found"},
     ),
 
     update=extend_schema(
@@ -646,14 +703,14 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         description="Updates an academic term. Activation rules are enforced by the serializer.",
         tags=["Admin Management"],
         request=AcademicTermSerializer,
-        responses={200: AcademicTermSerializer, 400: BAD_REQUEST_RESP},
+        responses={200: AcademicTermSerializer, 400: "Bad Request"},
     ),
 
     partial_update=extend_schema(
         summary="Partially Update Academic Term",
         tags=["Admin Management"],
         request=AcademicTermSerializer,
-        responses={200: AcademicTermSerializer, 400: BAD_REQUEST_RESP},
+        responses={200: AcademicTermSerializer, 400: "Bad Request"},
     ),
 
     destroy=extend_schema(
@@ -661,6 +718,41 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         description="Soft delete. Marks the term as inactive (`is_active=false`).",
         tags=["Admin Management"],
         responses={204: OpenApiResponse(description="No Content")},
+    ),
+
+    # ==========================
+    # BULK CREATE
+    # ==========================
+    bulk_create=extend_schema(
+        summary="Bulk Create Academic Terms",
+        description="""
+        Creates multiple academic terms in a single request under the same session.
+
+        Business rules:
+        - Session must exist and be active.
+        - Only one term can be active at a time (including existing terms in the session).
+        - Duplicate `term_number` values for the same session are not allowed.
+        - `term_type` is automatically assigned based on `term_number`.
+        - `start_date` must be before `end_date`.
+
+        Example request:
+        ```json
+        {
+          "session": "<session_uuid>",
+          "terms": [
+            {"term_number": 1, "start_date": "2026-01-10", "end_date": "2026-04-05", "is_active": true},
+            {"term_number": 2, "start_date": "2026-04-15", "end_date": "2026-07-30", "is_active": false}
+          ]
+        }
+        ```
+        """,
+        tags=["Admin Management"],
+        request=None,  # Custom payload, not a single serializer
+        responses={
+            201: OpenApiResponse(description="List of created terms with ID, term_type, and name"),
+            400: "Bad Request",
+            404: "Not Found",
+        },
     ),
 
     # ==========================
@@ -681,11 +773,9 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         """,
         tags=["Admin Management"],
         responses={
-            200: OpenApiResponse(
-                description="Term successfully opened for score entry."
-            ),
-            400: BAD_REQUEST_RESP,
-            404: NOT_FOUND_RESP,
+            200: OpenApiResponse(description="Term successfully opened for score entry."),
+            400: "Bad Request",
+            404: "Not Found",
         },
     ),
 
@@ -702,15 +792,12 @@ ACADEMIC_TERM_SCHEMA = extend_schema_view(
         """,
         tags=["Admin Management"],
         responses={
-            200: OpenApiResponse(
-                description="Term successfully closed for score entry."
-            ),
-            400: BAD_REQUEST_RESP,
-            404: NOT_FOUND_RESP,
+            200: OpenApiResponse(description="Term successfully closed for score entry."),
+            400: "Bad Request",
+            404: "Not Found",
         },
     ),
 )
-
 
 # ============================================================================
 # Subject Schema Decorator
@@ -1024,186 +1111,212 @@ TeacherViewSetSchema = extend_schema_view(
     # LIST TEACHERS
     # ============================================================
     list=extend_schema(
-        summary="List All Teachers (School Restricted)",
+        tags=["Admin Management"],
+        summary="List All Teachers (School Scoped)",
         description=(
-            "Returns a list of teachers belonging to the authenticated user's school.\n\n"
-            "Use this endpoint for:\n"
-            " - Admin viewing all teachers\n"
+            "Returns a paginated list of teachers belonging to the authenticated user's school.\n\n"
+            "**Use Cases:**\n"
+            " - Admin or principal viewing all teachers in their school\n"
             " - Filtering staff in a multi-tenant environment\n"
+            " - Supports search (by name, email, staff ID, department), ordering, and pagination\n\n"
+            "**Notes:**\n"
+            " - Only teachers within the authenticated user's school are returned.\n"
         ),
-        responses={200: TeacherListSerializer},
+        responses={200: TeacherListSerializer(many=True)},
     ),
+
     # ============================================================
     # RETRIEVE SINGLE TEACHER
     # ============================================================
     retrieve=extend_schema(
-        summary="Retrieve a Teacher Profile",
+        tags=["Admin Management"],
+        summary="Retrieve a Single Teacher Profile",
         description=(
             "Fetch detailed information about a single teacher, including:\n"
-            " - Personal + professional data\n"
+            " - Personal information (name, email)\n"
+            " - Professional information (staff ID, department, qualification)\n"
             " - Assigned classrooms\n"
             " - Assigned subjects\n\n"
-            "Only accessible within the school scope."
+            "**Access Control:**\n"
+            " - Only accessible within the teacher's school scope"
         ),
         responses={200: TeacherDetailSerializer},
     ),
+
     # ============================================================
-    # ADMIN: ASSIGN CLASSROOMS
+    # LIST TEACHERS WITH ASSIGNMENTS
     # ============================================================
-    assign_classrooms=extend_schema(
-        summary="Assign Classrooms to Teacher (Admin Only)",
+    list_with_assignments=extend_schema(
+        tags=["Admin Management"],
+        summary="List Teachers with Assigned Classrooms and Subjects",
         description=(
-            "**ADMIN ACTION**\n\n"
-            "Assign one or multiple classrooms to a teacher.\n"
-            "This action *replaces all existing classroom assignments.*\n\n"
-            "Validations:\n"
-            " - Classroom IDs must exist\n"
-            " - All must belong to admin’s school\n"
+            "Returns all teachers in the authenticated user's school along with their teaching assignments:\n"
+            " - Personal info (name, email, staff ID)\n"
+            " - Classrooms assigned\n"
+            " - Subjects assigned\n\n"
+            "**Features:**\n"
+            " - Supports pagination, filtering, and ordering\n"
+            " - Useful for admin dashboards or reporting\n"
+            " - Nested classroom and subject objects provide full assignment context\n"
         ),
-        request=AdminAssignClassroomsSerializer,
+        responses={200: TeacherListWithAssignmentsSerializer(many=True)},
+    ),
+
+    # ============================================================
+    # ASSIGN CLASSROOMS AND SUBJECTS
+    # ============================================================
+    assign_classrooms_subjects=extend_schema(
+        tags=["Admin Management"],
+        summary="Assign Classrooms and Subjects to a Teacher",
+        description=(
+            "Admin-only endpoint to assign classrooms and subjects to a specific teacher.\n\n"
+            "**Behavior:**\n"
+            " - Replaces the teacher's current classrooms and subjects with the provided lists\n"
+            " - Updates `TeachingAssignment` objects automatically\n"
+            " - Fully transactional: changes are applied atomically\n"
+            " - Handles duplicates and ensures database constraints (`unique_together`) are not violated\n\n"
+            "**Request Body:**\n"
+            " - `classroom_ids`: List of classroom UUIDs\n"
+            " - `subject_ids`: List of subject UUIDs\n\n"
+            "**Notes:**\n"
+            " - Only classrooms and subjects belonging to the authenticated user's school are allowed\n"
+            " - Duplicate entries in `subject_ids` or `classroom_ids` are rejected\n"
+        ),
         responses={
             200: TeacherDetailSerializer,
-            400: OpenApiResponse(description="Invalid classroom IDs"),
-            403: OpenApiResponse(description="Not allowed"),
-        },
-        examples=[
-            OpenApiExample(
-                "Assign Classrooms Example",
-                value={"classroom_ids": ["uuid-123", "uuid-456"]},
-            )
-        ],
-    ),
-    # ============================================================
-    # ADMIN: ASSIGN SUBJECTS
-    # ============================================================
-    assign_subjects=extend_schema(
-        summary="Assign Subjects to Teacher (Admin Only)",
-        description=(
-            "**ADMIN ACTION**\n\n"
-            "Assign one or multiple subjects to a teacher.\n"
-            "This **fully replaces** previous subject assignments.\n\n"
-            "Validations:\n"
-            " - All subjects must exist\n"
-            " - Must belong to admin’s school"
-        ),
-        request=AdminAssignSubjectsSerializer,
-        responses={
-            200: TeacherDetailSerializer,
-            400: OpenApiResponse(description="Invalid subject IDs"),
-            403: OpenApiResponse(description="Not allowed"),
-        },
-    ),
-    # ============================================================
-    # TEACHER: BULK CREATE TEACHING ASSIGNMENTS
-    # ============================================================
-    assign_teaching=extend_schema(
-        summary="Teacher: Bulk Assign Classroom + Subject Combinations",
-        description=(
-            "**TEACHER ACTION**\n\n"
-            "Allows a teacher to assign themselves to multiple classes and subjects.\n"
-            "Useful for bulk creation of teaching roles.\n\n"
-            "Validations:\n"
-            " - Classroom + Subject must belong to teacher’s school\n"
-            " - Avoids creating duplicates using `get_or_create`\n"
-        ),
-        request=TeacherCreateTeachingAssignmentsSerializer,
-        responses={
-            200: OpenApiResponse(description="Assignments Created Successfully"),
-            403: OpenApiResponse(
-                description="Teacher cannot assign on behalf of others"
-            ),
-        },
-        examples=[
-            OpenApiExample(
-                "Bulk Teaching Assignment Example",
-                value={
-                    "assignments": [
-                        {"classroom": "uuid-101", "subject": "uuid-201"},
-                        {"classroom": "uuid-102", "subject": "uuid-202"},
-                    ]
-                },
-            )
-        ],
-    ),
-    # ============================================================
-    # TEACHER: UPDATE SINGLE TEACHING ASSIGNMENT
-    # ============================================================
-    reassign_teaching=extend_schema(
-        summary="Teacher: Update an Existing Teaching Assignment",
-        description=(
-            "**TEACHER ACTION**\n\n"
-            "Allows a teacher to modify one of their teaching assignments.\n"
-            "Teachers can change:\n"
-            " - classroom\n"
-            " - subject\n"
-            " - or both\n\n"
-            "Validations:\n"
-            " - New classroom/subject must be valid for school\n"
-            " - Duplicate combinations are prevented\n"
-        ),
-        request=TeacherReassignTeachingAssignmentSerializer,
-        responses={
-            200: OpenApiResponse(description="Assignment Updated Successfully"),
-            404: OpenApiResponse(description="Assignment Not Found"),
-            403: OpenApiResponse(
-                description="Cannot modify another teacher's assignment"
-            ),
-        },
+            400: "Validation errors for invalid classrooms, subjects, or duplicates",
+            403: "Forbidden if the user is not an admin/principal"
+        }
     ),
 )
 
 GRADING_SCHEMA = extend_schema_view(
+    # -------------------- Standard CRUD --------------------
     list=extend_schema(
         tags=["Grade Scales"],
-        summary="List all grade scales for the school",
+        summary="List grade scales",
         description=(
             "Returns all grade scales configured for the authenticated user's school.\n"
-            "Results are ordered by `max_score` (descending) and then by `order`.\n"
-            "Teachers can only view grade scales, while principals/school owners can manage them."
+            "Results are ordered by `order` and `max_score`.\n"
+            "Teachers have read-only access while principals/school owners can manage them."
         ),
         responses={200: GradeScaleSerializer(many=True)},
     ),
+
     retrieve=extend_schema(
         tags=["Grade Scales"],
-        summary="Retrieve a single grade scale",
-        description="Fetch details for a specific grade scale belonging to the authenticated user's school.",
+        summary="Retrieve grade scale",
+        description="Fetch details of a specific grade scale belonging to the authenticated user's school.",
         responses={200: GradeScaleSerializer},
     ),
+
     create=extend_schema(
         tags=["Grade Scales"],
-        summary="Create a grade scale",
+        summary="Create grade scale",
         description=(
-            "Create a new grading scale bound to the authenticated user's school.\n"
-            "**Only principals/school owners** can perform this action."
+            "Create a new grade scale for the authenticated user's school.\n"
+            "Only principals or school owners are allowed to perform this action."
         ),
         request=GradeScaleSerializer,
         responses={201: GradeScaleSerializer},
     ),
+
     update=extend_schema(
         tags=["Grade Scales"],
-        summary="Update a grade scale",
-        description=(
-            "Fully update an existing grade scale.\n"
-            "The `school` field is locked and cannot be changed."
-        ),
+        summary="Update grade scale",
+        description="Fully update an existing grade scale. The `school` field cannot be modified.",
         request=GradeScaleSerializer,
         responses={200: GradeScaleSerializer},
     ),
+
     partial_update=extend_schema(
         tags=["Grade Scales"],
-        summary="Partially update a grade scale",
-        description="Update specific fields on an existing grade scale.",
+        summary="Partially update grade scale",
+        description="Update specific fields of an existing grade scale.",
         request=GradeScaleSerializer,
         responses={200: GradeScaleSerializer},
     ),
+
     destroy=extend_schema(
         tags=["Grade Scales"],
-        summary="Delete a grade scale",
+        summary="Delete grade scale",
         description=(
-            "Soft delete or permanently remove a grade scale. "
-            "Behavior depends on backend policy. Teachers cannot delete scales."
+            "Deletes a grade scale belonging to the authenticated user's school.\n"
+            "Teachers cannot perform this action."
         ),
         responses={204: OpenApiResponse(description="Grade scale deleted")},
+    ),
+
+    # -------------------- Bulk Operations --------------------
+    bulk_create=extend_schema(
+        tags=["Grade Scales"],
+        summary="Bulk create or update grade scales",
+        description=(
+            "Create or update multiple grade scales in one request.\n"
+            "Validation rules:\n"
+            "- Full coverage from 0 to 100\n"
+            "- No overlapping score ranges\n"
+            "- Unique grade values\n"
+            "- Valid grade points (0–5)\n"
+            "Operation is atomic (all succeed or all fail)."
+        ),
+        request=TenantAwareGradeScaleSerializer,
+        responses={201: GradeScaleSerializer(many=True)},
+    ),
+
+    apply_default=extend_schema(
+        tags=["Grade Scales"],
+        summary="Apply default grading system",
+        description=(
+            "Apply a predefined grading system such as:\n"
+            "- Standard (A–F)\n"
+            "- Extended (A+–F)\n"
+            "- Nigerian (A1–F9)\n\n"
+            "Existing active grade scales will be replaced automatically."
+        ),
+        request=TenantAwareGradeScaleSerializer,
+        responses={200: GradeScaleSerializer(many=True)},
+    ),
+
+    # -------------------- Status Actions --------------------
+    activate=extend_schema(
+        tags=["Grade Scales"],
+        summary="Activate grade scale",
+        description="Marks a grade scale as active.",
+        responses={200: OpenApiResponse(description="Grade scale activated")},
+    ),
+
+    deactivate=extend_schema(
+        tags=["Grade Scales"],
+        summary="Deactivate grade scale",
+        description="Marks a grade scale as inactive without deleting it.",
+        responses={200: OpenApiResponse(description="Grade scale deactivated")},
+    ),
+
+    reset=extend_schema(
+        tags=["Grade Scales"],
+        summary="Reset grading system",
+        description=(
+            "Deactivates all active grade scales for the school.\n"
+            "This operation does not delete any records."
+        ),
+        responses={200: OpenApiResponse(description="All grade scales deactivated")},
+    ),
+
+    reorder=extend_schema(
+        tags=["Grade Scales"],
+        summary="Reorder grade scales",
+        description=(
+            "Update the display order of grade scales.\n"
+            "Payload format:\n"
+            "`{ \"order\": [id1, id2, id3] }`\n\n"
+            "All IDs must belong to the authenticated user's school."
+        ),
+        request=serializers.DictField(
+            child=serializers.ListField(child=serializers.IntegerField()),
+            help_text="Example: { 'order': [1,2,3] }"
+        ),
+        responses={200: OpenApiResponse(description="Grade scales reordered successfully")},
     ),
 )
 
@@ -1211,126 +1324,225 @@ GRADING_SCHEMA = extend_schema_view(
 GRADE_SCALE_ACTION_SCHEMAS = {
     "bulk_create": extend_schema(
         tags=["Grade Scales"],
-        summary="Bulk create grading scales (atomic)",
+        summary="Bulk create or update grade scales",
         description=(
-            "Allows admins to upload multiple grading scales at once.\n"
-            "- All existing active scales are deactivated.\n"
-            "- The new scales become the active grading system.\n"
-            "- This operation is atomic (all-or-nothing)."
+            "Create or update multiple grade scales in a single request.\n"
+            "Ensures complete score coverage and prevents overlaps."
         ),
-        request=GradeScaleBulkCreateSerializer,
-        responses={201: OpenApiResponse(description="Bulk-created grade scales")},
+        request=TenantAwareGradeScaleSerializer,
+        responses={201: GradeScaleSerializer(many=True)},
     ),
+
     "apply_default": extend_schema(
         tags=["Grade Scales"],
-        summary="Apply a predefined grading system",
+        summary="Apply default grading system",
         description=(
-            "Apply a default grading system (e.g., *standard*, *extended*, *nigerian*).\n"
-            "This resets the current active system and loads the chosen preset."
+            "Loads a predefined grading system (standard, extended, Nigerian).\n"
+            "Existing scales are replaced automatically."
         ),
-        request=DefaultGradingSystemSerializer,
-        responses={200: OpenApiResponse(description="Default grading system applied")},
+        request=TenantAwareGradeScaleSerializer,
+        responses={200: GradeScaleSerializer(many=True)},
     ),
+
     "activate": extend_schema(
         tags=["Grade Scales"],
-        summary="Activate a grade scale",
-        description=(
-            "Marks the grade scale as active. Other scales remain unchanged.\n"
-            "Used when multiple grade scales exist but only some should count."
-        ),
+        summary="Activate grade scale",
+        description="Marks the selected grade scale as active.",
         responses={200: OpenApiResponse(description="Grade scale activated")},
     ),
+
     "deactivate": extend_schema(
         tags=["Grade Scales"],
-        summary="Deactivate a grade scale",
-        description="Marks the grade scale as inactive. Does not delete the record.",
+        summary="Deactivate grade scale",
+        description="Marks the selected grade scale as inactive.",
         responses={200: OpenApiResponse(description="Grade scale deactivated")},
     ),
+
     "reset": extend_schema(
         tags=["Grade Scales"],
         summary="Reset grading system",
-        description=(
-            "Deactivates **all** active grade scales for the school.\n"
-            "This does not delete records — it is a soft reset."
-        ),
-        responses={204: OpenApiResponse(description="Grading system reset")},
+        description="Deactivates all active grade scales for the school.",
+        responses={200: OpenApiResponse(description="All grade scales deactivated")},
     ),
+
     "reorder": extend_schema(
         tags=["Grade Scales"],
         summary="Reorder grade scales",
         description=(
-            "Accepts: `{ order: [ids...] }`\n"
-            "- Order controls how grades show in frontend tables.\n"
-            "- Highest grade should be first.\n"
-            "- IDs must belong to the current school."
+            "Controls how grade scales appear in the UI.\n"
+            "Payload example:\n"
+            "`{ \"order\": [1,2,3] }`"
         ),
-        request=serializers.ListField(child=serializers.IntegerField()),
-        responses={200: OpenApiResponse(description="Grades reordered successfully")},
+        request=serializers.DictField(
+            child=serializers.ListField(child=serializers.IntegerField())
+        ),
+        responses={200: OpenApiResponse(description="Grade scales reordered successfully")},
     ),
 }
-
 
 
 AssessmentPolicySchema = extend_schema_view(
     list=extend_schema(
         summary="List assessment policies",
         description="""
-Retrieve all assessment policies that belong to the authenticated user's school.
+Retrieve all assessment policies belonging to the authenticated user's school.
 
-What happens:
-- Teachers can view, but cannot create or edit.
-- Filters by the requesting user's school automatically.
+Behavior:
+- Automatically filtered by the user's school.
+- Returns both active and inactive policies.
+- Includes nested assessment types and computed total weight.
 - Supports search and ordering.
-"""
+
+Serializer:
+- Uses **AssessmentPolicyListSerializer**
+""",
+        responses=AssessmentPolicyListSerializer,
     ),
+
     retrieve=extend_schema(
-        summary="Retrieve a single assessment policy",
+        summary="Retrieve an assessment policy",
         description="""
-Fetch one AssessmentPolicy and its nested AssessmentTypes.
+Retrieve a single assessment policy by ID.
 
-What happens:
-- Ensures the policy belongs to the user's school.
-- Returns full policy details including CA/exam weights.
-"""
+Behavior:
+- Ensures the policy belongs to the authenticated user's school.
+- Returns full policy details including:
+  - Term
+  - CA and Exam weights
+  - Nested assessment types
+  - Computed total weight
+
+Serializer:
+- Uses **AssessmentPolicyListSerializer**
+""",
+        responses=AssessmentPolicyListSerializer,
     ),
+
     create=extend_schema(
-        summary="Create a new assessment policy",
+        summary="Create an assessment policy",
         description="""
-Admins can create AssessmentPolicy.
+Create a new assessment policy for a specific academic term.
 
-Validation:
-- ca_weight + exam_weight must equal 100
-- Automatically attaches the policy to the user's school
+Validation rules:
+- `ca_weight + exam_weight` **must equal 100%**
+- Only **one active policy per school and term** is allowed
 
-What happens internally:
-1. Serializer validates and enforces weight rules.
-2. perform_create() attaches school.
-3. Returns the created policy with nested types = [] initially.
-"""
+Behavior:
+- School is automatically inferred from the authenticated user.
+- Assessment types are not created here (added separately or via defaults).
+
+Serializer:
+- Request: **AssessmentPolicyCreateSerializer**
+- Response: **AssessmentPolicyListSerializer**
+
+Errors:
+- Returns validation errors if business rules are violated.
+""",
+        request=AssessmentPolicyCreateSerializer,
+        responses=AssessmentPolicyListSerializer,
     ),
+
     update=extend_schema(
         summary="Update an assessment policy",
         description="""
-Admins only. Updates policy fields.
+Update an existing assessment policy.
 
-What happens:
-- Serializer validates again.
-- School is forced to remain the same (cannot be changed).
-"""
+Rules:
+- CA + Exam weights must still equal 100%.
+- Term cannot be changed.
+- Only one active policy per term is allowed when activating.
+
+Serializer:
+- Request: **AssessmentPolicyUpdateSerializer**
+- Response: **AssessmentPolicyListSerializer**
+""",
+        request=AssessmentPolicyUpdateSerializer,
+        responses=AssessmentPolicyListSerializer,
     ),
+
     partial_update=extend_schema(
-        summary="Partially update assessment policy",
-        description="Same as update, but allows updating only part of the fields."
+        summary="Partially update an assessment policy",
+        description="""
+Partially update an assessment policy.
+
+Behavior:
+- Same validation rules as full update.
+- Only provided fields are updated.
+- Term remains immutable.
+
+Serializer:
+- Request: **AssessmentPolicyUpdateSerializer**
+- Response: **AssessmentPolicyListSerializer**
+""",
+        request=AssessmentPolicyUpdateSerializer,
+        responses=AssessmentPolicyListSerializer,
     ),
+
     destroy=extend_schema(
         summary="Delete an assessment policy",
         description="""
-Hard delete. (Not soft-deleted.)
+Delete an assessment policy permanently.
 
-What happens:
-- Ensures policy belongs to user's school.
-- Deletes the policy and its related types.
-"""
+Behavior:
+- Ensures the policy belongs to the authenticated user's school.
+- Deletes the policy and all related assessment types.
+- This is a **hard delete**.
+
+Response:
+- 204 No Content on success.
+""",
+        responses={204: None},
+    ),
+
+    # -------------------------------------------------
+    # Custom actions
+    # -------------------------------------------------
+
+    apply_default=extend_schema(
+        summary="Apply a default assessment policy",
+        description="""
+Create and activate a default assessment policy using a predefined configuration.
+
+Available configurations:
+- **standard_60_40** → Exam 60%, Tests 40%
+- **half_term** → CA 50%, Half Term Exam 50%
+- **detailed** → Tests, Assignments, Exam
+
+Behavior:
+- Deactivates any existing active policy for the selected term.
+- Creates the policy and its assessment types atomically.
+- School is inferred from the authenticated user.
+
+Serializer:
+- Request: **DefaultAssessmentPolicySerializer**
+- Response: **AssessmentPolicyListSerializer**
+
+Errors:
+- Returns validation error if the selected term does not belong to the user's school.
+""",
+        request=DefaultAssessmentPolicySerializer,
+        responses=AssessmentPolicyListSerializer,
+    ),
+
+    active_for_term=extend_schema(
+        summary="Get active assessment policy for a term",
+        description="""
+Retrieve the active assessment policy for a given academic term.
+
+Query Parameters:
+- `term` (optional): AcademicTerm ID
+
+Behavior:
+- If `term` is provided:
+  - Returns the active policy for that term.
+  - Returns 404 if no active policy exists.
+- If `term` is not provided:
+  - Returns all active policies for the school.
+
+Serializer:
+- Response: **AssessmentPolicyListSerializer**
+""",
+        responses=AssessmentPolicyListSerializer,
     ),
 )
 
@@ -1370,7 +1582,7 @@ ActivePolicyForTermSchema = extend_schema(
             type=int
         ),
     ],
-    responses={200: AssessmentPolicySerializer},
+    responses={200: AssessmentPolicyListSerializer},
     summary="Get active policy for a term",
     description="""
 Fetch the currently active AssessmentPolicy for a specific term.
@@ -1391,46 +1603,60 @@ What happens:
 
 AssessmentTypeSchema = extend_schema_view(
     list=extend_schema(
-        summary="List assessment types",
+        summary="List Assessment Types",
         description="""
-List all AssessmentType objects.
+Retrieve all AssessmentType objects for the current user's school.
 
 Features:
-- Supports filtering by ?policy=<policy_id>
-- Only returns types belonging to current user's school
+- Supports filtering by `?policy=<policy_id>`.
+- Returns only types belonging to the requesting user's school.
+- Includes `policy_name` and `category_display` for readability.
 """
     ),
     retrieve=extend_schema(
-        summary="Retrieve a single assessment type",
-        description="Return details for a single AssessmentType."
+        summary="Retrieve a single Assessment Type",
+        description="""
+Return detailed information for a single AssessmentType instance.
+
+Includes:
+- Parent policy info (`policy_name`)
+- Category display (`category_display`)
+"""
     ),
     create=extend_schema(
-        summary="Create a new assessment type",
+        summary="Create a new Assessment Type",
         description="""
 Admins only.
 
-Validation rules:
-- weight must not cause total policy weight to exceed 100%
-- policy must belong to current user's school
-
-What happens:
-1. Serializer validates.
-2. perform_create() prevents cross-school type insertion.
-3. Type is created under the policy.
+Validation & behavior:
+1. `policy` must belong to the request user's school.
+2. `weight` must not cause the total policy weight to exceed 100%.
+3. Automatically assigns `order` if not provided.
+4. For default policies, creation will fail if total weight exceeds 100%.
+5. The type is saved under the specified policy.
 """
     ),
     update=extend_schema(
-        summary="Update assessment type",
+        summary="Update an Assessment Type",
         description="""
 Admins only.
 
-What happens:
-- Ensures a type cannot be moved to a policy of another school.
-- Enforces weight constraints again.
+Validation & behavior:
+1. Type cannot be moved to a policy of another school.
+2. Weight constraints are enforced:
+   - Excludes current type from weight calculation.
+   - Total weight for the policy cannot exceed 100%.
+3. `order` can be updated manually or auto-adjusted.
 """
     ),
     destroy=extend_schema(
-        summary="Delete an assessment type",
-        description="Hard delete an AssessmentType."
+        summary="Delete an Assessment Type",
+        description="""
+Hard delete an AssessmentType.
+
+Behavior:
+- Type is removed from the database.
+- Ensure that the deletion does not break any active assessment policies or calculations.
+"""
     ),
 )

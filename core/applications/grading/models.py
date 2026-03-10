@@ -1,10 +1,14 @@
-from django.db import models
-
-from core.applications.academics.models import AcademicTerm, AssessmentRecord
-from core.helper.models import TimeStampedModel
 import auto_prefetch
-from django.utils.translation import gettext_lazy as _
 from django.core.exceptions import ValidationError
+from django.db import models
+from django.db.models import Q
+from django.db.models.functions import Trim
+from django.db.models.functions import Upper
+from django.utils.translation import gettext_lazy as _
+
+from core.applications.academics.models import AcademicTerm
+from core.applications.academics.models import AssessmentRecord
+from core.helper.models import TenantAwareModel, TimeStampedModel
 
 # Create your models here.
 
@@ -199,14 +203,11 @@ class TermReportSummary(TimeStampedModel):
 
 
 
-class GradeScale(TimeStampedModel):
+class GradeScale(TenantAwareModel):
     """
     Defines grade brackets for a school (e.g., A = 75-100).
     """
 
-    school = auto_prefetch.ForeignKey("users.School", on_delete=models.CASCADE)
-
-    # ✅ NEW — safe optional fields (won't break existing data)
     term = auto_prefetch.ForeignKey(
         "academics.AcademicTerm",
         null=True,
@@ -246,6 +247,46 @@ class GradeScale(TimeStampedModel):
 
     class Meta(auto_prefetch.Model.Meta):
         ordering = ["-max_score"]
-        unique_together = ("school", "grade", "is_honors")
         verbose_name = _("Grade Scale")
         verbose_name_plural = _("Grade Scales")
+
+        constraints = [
+            # -------------------------------------------------
+            # UNIQUE active grade per scope (school + term + class)
+            # -------------------------------------------------
+            models.UniqueConstraint(
+                Upper(Trim("grade")),
+                "school",
+                "term",
+                "class_room",
+                condition=Q(is_active=True),
+                name="unique_active_grade_per_scope",
+            ),
+
+            # -------------------------------------------------
+            # Prevent overlapping score ranges per scope
+            # (DB-level protection, serializer already checks)
+            # -------------------------------------------------
+            models.CheckConstraint(
+                condition=Q(min_score__lte=models.F("max_score")),
+                name="min_score_lte_max_score",
+            ),
+
+            models.CheckConstraint(
+                condition=Q(min_score__gte=0) & Q(max_score__lte=100),
+                name="score_range_0_100",
+            ),
+
+            # -------------------------------------------------
+            # Prevent negative or insane points
+            # -------------------------------------------------
+            models.CheckConstraint(
+                condition=Q(point__gte=0) & Q(point__lte=5),
+                name="point_between_0_and_5",
+            ),
+        ]
+
+    @classmethod
+    def active_for_school(cls, school):
+        """Return only active grade scales for the given school."""
+        return cls.objects.for_school(school).filter(is_active=True)

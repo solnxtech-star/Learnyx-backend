@@ -1,6 +1,10 @@
+from django.db import models
 from django.db import transaction
+from django.utils.translation import gettext_lazy as _
+from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters
+from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -14,7 +18,17 @@ from core.applications.users.api.schemas import ApplyDefaultPolicySchema
 from core.applications.users.api.schemas import AssessmentPolicySchema
 from core.applications.users.api.schemas import AssessmentTypeSchema
 from core.applications.users.api.serializers.admin_accessment_serializers import (
-    AssessmentPolicySerializer,
+    AssessmentPolicyCreateSerializer,
+)
+from core.applications.users.api.serializers.admin_accessment_serializers import (
+    AssessmentPolicyListSerializer,
+)
+
+# from core.applications.users.api.serializers.admin_accessment_serializers import (
+#     AssessmentPolicySerializer,
+# )
+from core.applications.users.api.serializers.admin_accessment_serializers import (
+    AssessmentPolicyUpdateSerializer,
 )
 from core.applications.users.api.serializers.admin_accessment_serializers import (
     AssessmentTypeSerializer,
@@ -28,67 +42,128 @@ from core.helper.permissions import IsPrincipalOrSchoolOwnerForPolicies
 @extend_schema(tags=["AccessmentPolicy"])
 @AssessmentPolicySchema
 class AssessmentPolicyViewSet(viewsets.ModelViewSet):
+    """
+    Tenant-aware API for managing Assessment Policies.
+
+    Responsibilities:
+    - List and retrieve assessment policies scoped to the authenticated user's school
+    - Create and update policies with strict business rules
+    - Apply predefined default policies
+    - Fetch active policy/policies for a specific term
+    """
+
     permission_classes = [IsAuthenticated, IsPrincipalOrSchoolOwnerForPolicies]
-    serializer_class = AssessmentPolicySerializer
-    filter_backends = [filters.OrderingFilter, filters.SearchFilter]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter, filters.SearchFilter]
+    filterset_fields = ["term", "is_active", "name"]
     ordering_fields = ["created_at", "name", "term"]
-    search_fields = ["name", "term__name"]
+    search_fields = ["name", "term__term_number", "term__session__name"]
+    ordering = ["term__session__name", "term__term_number", "name"]
 
+    # -----------------------------
+    # Queryset
+    # -----------------------------
     def get_queryset(self):
-        user = self.request.user
-        return AssessmentPolicy.objects.filter(
-            school=user.school
-        ).select_related("term", "school")
+        """
+        Restrict all queries to the authenticated user's school.
+        """
+        school = self.request.user.school
+        if not school:
+            return AssessmentPolicy.objects.none()
 
+        return AssessmentPolicy.objects.for_school(school).select_related("school", "term")
+
+    # -----------------------------
+    # Serializer selection
+    # -----------------------------
+    def get_serializer_class(self):
+        """
+        Return appropriate serializer per action.
+        """
+        if self.action == "create":
+            return AssessmentPolicyCreateSerializer
+        if self.action in ("update", "partial_update"):
+            return AssessmentPolicyUpdateSerializer
+        return AssessmentPolicyListSerializer
+
+    # -----------------------------
+    # Creation
+    # -----------------------------
     def perform_create(self, serializer):
+        """
+        Ensure created policy is tenant-aware.
+        """
         serializer.save(school=self.request.user.school)
 
-    def perform_update(self, serializer):
-        serializer.save(school=self.request.user.school)
-
+    # -----------------------------
+    # Custom actions
+    # -----------------------------
     @ApplyDefaultPolicySchema
     @action(detail=False, methods=["post"], url_path="apply-default")
     @transaction.atomic
     def apply_default(self, request):
-        serializer = DefaultAssessmentPolicySerializer(
-            data=request.data, context={"request": request}
-        )
-        serializer.is_valid(raise_exception=True)
+        """
+        Apply a predefined default assessment policy to a term.
 
-        policy = serializer.create(serializer.validated_data)
-        output = AssessmentPolicySerializer(policy, context={"request": request}).data
+        - Deactivates any existing active policy for the term
+        - Creates associated assessment types automatically
+        """
+        serializer = DefaultAssessmentPolicySerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        policy = serializer.save()
 
         return Response(
-            {"message": "Default policy created", "policy": output},
-            status=status.HTTP_201_CREATED
+            {
+                "message": "Default assessment policy applied successfully.",
+                "policy": AssessmentPolicyListSerializer(policy, context={"request": request}).data,
+            },
+            status=status.HTTP_201_CREATED,
         )
 
     @ActivePolicyForTermSchema
     @action(detail=False, methods=["get"], url_path="active-for-term")
     def active_for_term(self, request):
-        term_id = request.query_params.get("term")
+        """
+        Retrieve active assessment policy/policies for the school.
+
+        Query Params:
+        - `term` (optional): Return active policy for this term only
+        - If omitted, returns all active policies
+        """
         school = request.user.school
+        if not school:
+            return Response([], status=status.HTTP_200_OK)
 
+        queryset = AssessmentPolicy.objects.for_school(school).filter(is_active=True).select_related("term", "school")
+
+        term_id = request.query_params.get("term")
         if term_id:
-            policy = AssessmentPolicy.objects.filter(
-                school=school, term_id=term_id, is_active=True
-            ).first()
-
+            policy = queryset.filter(term_id=term_id).first()
             if not policy:
                 return Response(
-                    {"detail": "No active policy for the provided term."},
+                    {"detail": "No active assessment policy found for this term."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+            return Response(AssessmentPolicyListSerializer(policy, context={"request": request}).data, status=status.HTTP_200_OK)
 
-            return Response(
-                AssessmentPolicySerializer(policy, context={"request": request}).data
-            )
+        return Response(AssessmentPolicyListSerializer(queryset, many=True, context={"request": request}).data, status=status.HTTP_200_OK)
 
-        policies = AssessmentPolicy.objects.filter(school=school, is_active=True)
-        return Response(
-            AssessmentPolicySerializer(policies, many=True, context={"request": request}).data
-        )
+    # -----------------------------
+    # Update & Delete
+    # -----------------------------
+    @transaction.atomic
+    def perform_update(self, serializer):
+        """
+        Ensure updates are tenant-safe.
+        """
+        serializer.save(school=self.request.user.school)
 
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        """
+        Soft-delete: mark policy as inactive rather than hard delete.
+        """
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])
 
 # -------------------------------------------------------
 # Assessment Type ViewSet
@@ -97,6 +172,14 @@ class AssessmentPolicyViewSet(viewsets.ModelViewSet):
 @extend_schema(tags=["AccessmentType"])
 @AssessmentTypeSchema
 class AssessmentTypeViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing AssessmentType instances.
+
+    Validations:
+        - Policy must belong to the user's school.
+        - Default policies cannot exceed 100% total weight.
+        - Auto-assign order if not provided.
+    """
     permission_classes = [IsAuthenticated, IsPrincipalOrSchoolOwnerForPolicies]
     serializer_class = AssessmentTypeSerializer
     filter_backends = [filters.OrderingFilter, filters.SearchFilter]
@@ -112,21 +195,78 @@ class AssessmentTypeViewSet(viewsets.ModelViewSet):
         policy_id = self.request.query_params.get("policy")
         if policy_id:
             qs = qs.filter(policy_id=policy_id)
-
         return qs
 
+    @transaction.atomic
     def perform_create(self, serializer):
         policy = serializer.validated_data.get("policy")
+        user = self.request.user
 
-        if policy.school != self.request.user.school:
-            raise ValueError("Policy does not belong to your school.")
+        # -----------------------------
+        # School ownership check
+        # -----------------------------
+        if policy.school != user.school:
+            raise serializers.ValidationError({
+                "policy": _("Selected policy does not belong to your school.")
+            })
+
+        # -----------------------------
+        # Default policy total weight check
+        # -----------------------------
+        if getattr(policy, "is_default", False):
+            total_weight = policy.assessment_types.aggregate(
+                total=models.Sum("weight")
+            )["total"] or 0
+
+            new_weight = serializer.validated_data.get("weight", 0)
+            if total_weight + new_weight > 100:
+                raise serializers.ValidationError({
+                    "weight": _(
+                        "Cannot add new type: default policy already has 100% total weight. "
+                        "Current total: %(current)d%%, Trying to add: %(adding)d%%"
+                    ) % {"current": total_weight, "adding": new_weight}
+                })
+
+        # -----------------------------
+        # Auto-assign order
+        # -----------------------------
+        if "order" not in serializer.validated_data:
+            last_order = policy.assessment_types.aggregate(
+                max_order=models.Max("order")
+            )["max_order"] or 0
+            serializer.validated_data["order"] = last_order + 1
 
         serializer.save()
 
+    @transaction.atomic
     def perform_update(self, serializer):
-        policy = serializer.validated_data.get("policy", serializer.instance.policy)
+        instance = serializer.instance
+        policy = serializer.validated_data.get("policy", instance.policy)
+        user = self.request.user
 
-        if policy.school != self.request.user.school:
-            raise ValueError("Policy does not belong to your school.")
+        # -----------------------------
+        # School ownership check
+        # -----------------------------
+        if policy.school != user.school:
+            raise serializers.ValidationError({
+                "policy": _("Selected policy does not belong to your school.")
+            })
+
+        # -----------------------------
+        # Default policy weight check
+        # -----------------------------
+        if getattr(policy, "is_default", False):
+            total_weight = policy.assessment_types.exclude(
+                id=instance.id
+            ).aggregate(total=models.Sum("weight"))["total"] or 0
+
+            new_weight = serializer.validated_data.get("weight", instance.weight)
+            if total_weight + new_weight > 100:
+                raise serializers.ValidationError({
+                    "weight": _(
+                        "Cannot update type: default policy weight would exceed 100%. "
+                        "Current total (excluding this type): %(current)d%%, Trying to set: %(adding)d%%"
+                    ) % {"current": total_weight, "adding": new_weight}
+                })
 
         serializer.save()

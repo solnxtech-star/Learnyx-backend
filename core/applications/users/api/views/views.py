@@ -467,7 +467,10 @@ class UserViewSet(ModelViewSet):
         permission_classes=[AllowAny],
     )
     def register_student(self, request, *args, **kwargs):
-        serializer = CustomUserCreateSerializer(data=request.data)
+        serializer = CustomUserCreateSerializer(
+            data=request.data,
+            context={"request": request},
+        )
         serializer.is_valid(raise_exception=True)
 
         # Use the same creation flow as DRF + Djoser

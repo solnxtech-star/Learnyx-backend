@@ -120,7 +120,7 @@ class IsSchoolAdminOrAssignedTeacher(BasePermission):
 
     Access Rules:
     - School Owners & Principals: Full access
-    - Teachers: Limited to assigned classrooms & students
+    - Teachers: Limited to assigned classrooms & students, and must be approved
     - Others: No access
     """
 
@@ -135,9 +135,12 @@ class IsSchoolAdminOrAssignedTeacher(BasePermission):
             admin_type = getattr(user.adminprofile, "admin_type", None)
             return admin_type in ["school_owner", "principal"]
 
-        # Teachers allowed – object level check will restrict
+        # Teachers: must be approved
         if user.role == "teacher":
-            return True
+            teacher_profile = getattr(user, "teacherprofile", None)
+            if not teacher_profile:
+                return False
+            return teacher_profile.status == "approved"
 
         return False
 
@@ -151,6 +154,10 @@ class IsSchoolAdminOrAssignedTeacher(BasePermission):
 
         # Teachers
         if user.role != "teacher":
+            return False
+
+        teacher_profile = getattr(user, "teacherprofile", None)
+        if not teacher_profile or teacher_profile.status != "approved":
             return False
 
         # If object is a classroom

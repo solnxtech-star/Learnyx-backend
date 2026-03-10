@@ -1,6 +1,6 @@
-
-
 from django.db import transaction
+from django.db.models.functions import Trim
+from django.db.models.functions import Upper
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
@@ -9,16 +9,16 @@ from core.applications.grading.models import GradeScale
 
 class GradeScaleSerializer(serializers.ModelSerializer):
     """
-    Serializer for GradeScale model.
-    Defines grade brackets and points for a school's grading system.
+    Serializer for single GradeScale instance (tenant-aware).
 
-    Example:
-        {"grade": "A", "min_score": 75, "max_score": 100, "point": 5.0}
-
-    Attributes:
-        school_name (str): Read-only field showing school name
-        score_range (str): Read-only field showing formatted score range
+    Features:
+    - Shows school name
+    - Returns formatted score range
+    - Validates score range and uniqueness
     """
+
+    MAX_SCORE = 100
+    MIN_SCORE = 0
 
     school_name = serializers.CharField(source="school.name", read_only=True)
     score_range = serializers.SerializerMethodField()
@@ -26,206 +26,79 @@ class GradeScaleSerializer(serializers.ModelSerializer):
     class Meta:
         model = GradeScale
         fields = [
-            "id",
-            "school",
-            "school_name",
-            "grade",
-            "display_name",
-            "min_score",
-            "max_score",
-            "score_range",
-            "point",
-            "remark",
-            "is_honors",
-            "is_active",
-            "order",
-            "created_at",
-            "updated_at",
+            "id", "school", "school_name", "grade", "display_name",
+            "min_score", "max_score", "score_range", "point", "remark",
+            "is_honors", "is_active", "order", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "school"]
 
     def get_score_range(self, obj):
-        """Returns formatted score range (e.g., '75-100')"""
         return f"{obj.min_score}-{obj.max_score}"
 
+    def to_internal_value(self, data):
+        internal = super().to_internal_value(data)
+        if internal.get("grade"):
+            internal["grade"] = internal["grade"].strip().upper()
+        return internal
+
     def validate(self, data):
-        """
-        Validate grade scale data.
+        request = self.context.get("request")
+        school = getattr(request.user, "school", None)
+        if not school:
+            raise serializers.ValidationError(_("No school context found"))
 
-        Ensures:
-        1. min_score <= max_score
-        2. Scores are between 0 and 100
-        3. No overlapping score ranges within school
-        4. Grade is unique within school
-
-        Args:
-            data (dict): The grade scale data to validate
-
-        Returns:
-            dict: Validated data
-
-        Raises:
-            serializers.ValidationError: If validation fails
-        """
+        grade = data.get("grade")
         min_score = data.get("min_score")
         max_score = data.get("max_score")
-        grade = data.get("grade")
 
-        if min_score and max_score:
-            # Check min_score <= max_score
+        # Validate score range
+        if min_score is not None and max_score is not None:
             if min_score > max_score:
                 raise serializers.ValidationError(
-                    _("Minimum score cannot be greater than maximum score")
+                    {"min_score": _("Minimum score cannot exceed maximum score")}
                 )
-
-            # Check scores are within 0-100 range
-            if min_score < 0 or max_score > 100:
-                raise serializers.ValidationError(_("Scores must be between 0 and 100"))
-
-            # Check for overlapping score ranges
-            school = self.context["request"].user.school
-            overlapping = (
-                GradeScale.objects.filter(school=school, is_active=True)
-                .exclude(min_score__gt=max_score)
+            if min_score < self.MIN_SCORE or max_score > self.MAX_SCORE:
+                raise serializers.ValidationError(
+                    {"min_score": _("Scores must be between 0 and 100")}
+                )
+            overlapping = GradeScale.active_for_school(school) \
+                .exclude(min_score__gt=max_score) \
                 .exclude(max_score__lt=min_score)
-            )
-
             if self.instance:
                 overlapping = overlapping.exclude(id=self.instance.id)
-
             if overlapping.exists():
                 raise serializers.ValidationError(
-                    _("Score range overlaps with existing grade scale")
+                    {"min_score": _("Score range overlaps with an existing grade")}
                 )
 
-        # Check grade uniqueness
+        # Validate grade uniqueness
         if grade:
-            school = self.context["request"].user.school
-            existing = GradeScale.objects.filter(
-                school=school, grade=grade, is_active=True
-            )
-
+            normalized = grade.strip().upper()
+            existing = GradeScale.active_for_school(school) \
+                .annotate(norm_grade=Upper(Trim("grade"))) \
+                .filter(norm_grade=normalized)
             if self.instance:
                 existing = existing.exclude(id=self.instance.id)
-
             if existing.exists():
                 raise serializers.ValidationError(
-                    _("Grade '%(grade)s' already exists in your grading system")
-                    % {"grade": grade}
+                    {"grade": _("Grade '%s' already exists for this school") % normalized}
                 )
 
         return data
 
 
-class GradeScaleBulkCreateSerializer(serializers.Serializer):
+class TenantAwareGradeScaleSerializer(serializers.Serializer):
     """
-    Serializer for bulk creating or updating multiple grade scales (UPSERT).
+    Unified tenant-aware serializer for creating/updating grade scales.
+
+    Supports:
+    - Pre-configured systems (standard, extended, Nigerian)
+    - Custom bulk scales
     Ensures:
-    - Existing grades are UPDATED, not duplicated
-    - New grades are CREATED
-    - Gaps and overlaps are validated
-    - System remains consistent
-    """
-
-    scales = serializers.ListField(
-        child=serializers.DictField(),
-        min_length=3,
-        max_length=20,
-        help_text=_("List of grade scale configurations"),
-    )
-
-    def validate_scales(self, value):
-        """
-        Collective validation of all grade scales.
-        """
-        grades = set()
-
-        # Sort by min_score
-        sorted_scales = sorted(value, key=lambda x: x["min_score"])
-
-        # Must start at 0
-        if sorted_scales[0]["min_score"] != 0:
-            raise serializers.ValidationError(_("First grade scale must start at 0"))
-
-        # Must end at 100
-        if sorted_scales[-1]["max_score"] != 100:
-            raise serializers.ValidationError(_("Last grade scale must end at 100"))
-
-        previous_max = -1
-        for i, scale in enumerate(sorted_scales):
-            min_score = scale["min_score"]
-            max_score = scale["max_score"]
-            grade = scale["grade"]
-
-            # Check for gaps
-            if min_score != previous_max + 1:
-                raise serializers.ValidationError(
-                    _("Gap in score range between %(prev)d and %(next)d") % {
-                        "prev": previous_max,
-                        "next": min_score
-                    }
-                )
-
-            # Overlaps
-            if min_score <= previous_max:
-                raise serializers.ValidationError(
-                    _("Overlap in score ranges at scale %(index)d") % {"index": i + 1}
-                )
-
-            # Duplicate grades within payload
-            if grade in grades:
-                raise serializers.ValidationError(
-                    _("Duplicate grade '%(grade)s' found") % {"grade": grade}
-                )
-
-            grades.add(grade)
-            previous_max = max_score
-
-        return value
-
-    @transaction.atomic
-    def create(self, validated_data):
-        """
-        UPSERT (Update-or-Create) bulk logic.
-        """
-        request = self.context["request"]
-        school = request.user.school
-
-        scales = []
-
-        for index, scale_data in enumerate(validated_data["scales"]):
-
-            obj, created = GradeScale.objects.update_or_create(
-                school=school,
-                grade=scale_data["grade"],                     # Unique per school
-                is_honors=scale_data.get("is_honors", False),  # Part of unique key
-                defaults={
-                    "display_name": scale_data.get("display_name"),
-                    "min_score": scale_data["min_score"],
-                    "max_score": scale_data["max_score"],
-                    "point": scale_data["point"],
-                    "remark": scale_data.get("remark", ""),
-                    "order": index,
-                    "is_active": True,
-                }
-            )
-
-            scales.append(obj)
-
-        return {"scales": scales}
-
-
-
-class DefaultGradingSystemSerializer(serializers.Serializer):
-    """
-    Serializer for selecting a pre-configured grading system.
-    Provides quick setup options for common grading systems.
-
-    Available systems:
-        - standard: Basic A-F system (Common in many schools)
-        - extended: Includes A' for honors (Like in your example)
-        - nigerian: Nigerian WAEC grading system (A1-F9)
-        - custom: Create custom system manually
+    - Full coverage 0–100
+    - No overlaps
+    - Unique grades
+    - Valid points (0–5)
     """
 
     SYSTEM_CHOICES = [
@@ -236,186 +109,133 @@ class DefaultGradingSystemSerializer(serializers.Serializer):
     ]
 
     system_name = serializers.ChoiceField(
-        choices=SYSTEM_CHOICES, help_text=_("Select a pre-configured grading system")
+        choices=SYSTEM_CHOICES,
+        help_text=_("Select a pre-configured grading system or custom")
+    )
+    scales = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        help_text=_("List of custom grade scales if using 'custom'")
     )
 
+    MAX_SCORE = 100
+    MIN_SCORE = 0
+    MAX_POINT = 5.0
+
     def get_default_scales(self, system_name):
-        """
-        Get default grade scales for the selected system.
-
-        Args:
-            system_name (str): The selected grading system
-
-        Returns:
-            list: List of grade scale dictionaries
-
-        Raises:
-            serializers.ValidationError: If system_name is invalid
-        """
-        if system_name == "standard":
-            return [
-                {
-                    "grade": "A",
-                    "min_score": 75,
-                    "max_score": 100,
-                    "point": 5.0,
-                    "remark": "Excellent",
-                },
-                {
-                    "grade": "B",
-                    "min_score": 70,
-                    "max_score": 74,
-                    "point": 4.0,
-                    "remark": "Very Good",
-                },
-                {
-                    "grade": "C",
-                    "min_score": 60,
-                    "max_score": 69,
-                    "point": 3.0,
-                    "remark": "Good",
-                },
-                {
-                    "grade": "D",
-                    "min_score": 50,
-                    "max_score": 59,
-                    "point": 2.0,
-                    "remark": "Pass",
-                },
-                {
-                    "grade": "E",
-                    "min_score": 45,
-                    "max_score": 49,
-                    "point": 1.0,
-                    "remark": "Poor",
-                },
-                {
-                    "grade": "F",
-                    "min_score": 0,
-                    "max_score": 44,
-                    "point": 0.0,
-                    "remark": "Fail",
-                },
-            ]
-        elif system_name == "extended":
-            return [
-                {
-                    "grade": "A+",
-                    "display_name": "A'",
-                    "min_score": 90,
-                    "max_score": 100,
-                    "point": 5.0,
-                    "is_honors": True,
-                    "remark": "Distinction",
-                },
-                {
-                    "grade": "A",
-                    "min_score": 80,
-                    "max_score": 89,
-                    "point": 5.0,
-                    "remark": "Excellent",
-                },
-                {
-                    "grade": "B",
-                    "min_score": 70,
-                    "max_score": 79,
-                    "point": 4.0,
-                    "remark": "Very Good",
-                },
-                {
-                    "grade": "C",
-                    "min_score": 60,
-                    "max_score": 69,
-                    "point": 3.0,
-                    "remark": "Good",
-                },
-                {
-                    "grade": "D",
-                    "min_score": 50,
-                    "max_score": 59,
-                    "point": 2.0,
-                    "remark": "Pass",
-                },
-                {
-                    "grade": "E",
-                    "min_score": 40,
-                    "max_score": 49,
-                    "point": 1.0,
-                    "remark": "Poor",
-                },
-                {
-                    "grade": "F",
-                    "min_score": 0,
-                    "max_score": 39,
-                    "point": 0.0,
-                    "remark": "Fail",
-                },
-            ]
-        elif system_name == "nigerian":
-            return [
-                {
-                    "grade": "A1",
-                    "min_score": 75,
-                    "max_score": 100,
-                    "point": 5.0,
-                    "remark": "Distinction",
-                },
-                {
-                    "grade": "B2",
-                    "min_score": 70,
-                    "max_score": 74,
-                    "point": 4.0,
-                    "remark": "Very Good",
-                },
-                {
-                    "grade": "B3",
-                    "min_score": 65,
-                    "max_score": 69,
-                    "point": 3.5,
-                    "remark": "Good",
-                },
-                {
-                    "grade": "C4",
-                    "min_score": 60,
-                    "max_score": 64,
-                    "point": 3.0,
-                    "remark": "Credit",
-                },
-                {
-                    "grade": "C5",
-                    "min_score": 55,
-                    "max_score": 59,
-                    "point": 2.5,
-                    "remark": "Credit",
-                },
-                {
-                    "grade": "C6",
-                    "min_score": 50,
-                    "max_score": 54,
-                    "point": 2.0,
-                    "remark": "Credit",
-                },
-                {
-                    "grade": "D7",
-                    "min_score": 45,
-                    "max_score": 49,
-                    "point": 1.5,
-                    "remark": "Pass",
-                },
-                {
-                    "grade": "E8",
-                    "min_score": 40,
-                    "max_score": 44,
-                    "point": 1.0,
-                    "remark": "Pass",
-                },
-                {
-                    "grade": "F9",
-                    "min_score": 0,
-                    "max_score": 39,
-                    "point": 0.0,
-                    "remark": "Fail",
-                },
-            ]
-        else:
+        """Returns default grade scales for pre-configured systems."""
+        defaults = {
+            "standard": [
+                {"grade": "A", "min_score": 75, "max_score": 100, "point": 5.0, "remark": "Excellent"},
+                {"grade": "B", "min_score": 70, "max_score": 74, "point": 4.0, "remark": "Very Good"},
+                {"grade": "C", "min_score": 60, "max_score": 69, "point": 3.0, "remark": "Good"},
+                {"grade": "D", "min_score": 50, "max_score": 59, "point": 2.0, "remark": "Pass"},
+                {"grade": "E", "min_score": 45, "max_score": 49, "point": 1.0, "remark": "Poor"},
+                {"grade": "F", "min_score": 0, "max_score": 44, "point": 0.0, "remark": "Fail"},
+            ],
+            "extended": [
+                {"grade": "A+", "display_name": "A'", "min_score": 90, "max_score": 100, "point": 5.0, "is_honors": True, "remark": "Distinction"},
+                {"grade": "A", "min_score": 80, "max_score": 89, "point": 5.0, "remark": "Excellent"},
+                {"grade": "B", "min_score": 70, "max_score": 79, "point": 4.0, "remark": "Very Good"},
+                {"grade": "C", "min_score": 60, "max_score": 69, "point": 3.0, "remark": "Good"},
+                {"grade": "D", "min_score": 50, "max_score": 59, "point": 2.0, "remark": "Pass"},
+                {"grade": "E", "min_score": 40, "max_score": 49, "point": 1.0, "remark": "Poor"},
+                {"grade": "F", "min_score": 0, "max_score": 39, "point": 0.0, "remark": "Fail"},
+            ],
+            "nigerian": [
+                {"grade": "A1", "min_score": 75, "max_score": 100, "point": 5.0, "remark": "Distinction"},
+                {"grade": "B2", "min_score": 70, "max_score": 74, "point": 4.0, "remark": "Very Good"},
+                {"grade": "B3", "min_score": 65, "max_score": 69, "point": 3.5, "remark": "Good"},
+                {"grade": "C4", "min_score": 60, "max_score": 64, "point": 3.0, "remark": "Credit"},
+                {"grade": "C5", "min_score": 55, "max_score": 59, "point": 2.5, "remark": "Credit"},
+                {"grade": "C6", "min_score": 50, "max_score": 54, "point": 2.0, "remark": "Credit"},
+                {"grade": "D7", "min_score": 45, "max_score": 49, "point": 1.5, "remark": "Pass"},
+                {"grade": "E8", "min_score": 40, "max_score": 44, "point": 1.0, "remark": "Pass"},
+                {"grade": "F9", "min_score": 0, "max_score": 39, "point": 0.0, "remark": "Fail"},
+            ],
+        }
+        try:
+            return defaults[system_name]
+        except KeyError:
             raise serializers.ValidationError(_("Invalid grading system"))
+
+    def validate(self, data):
+        """Validates either a pre-configured system or custom scales."""
+        request = self.context.get("request")
+        school = getattr(request.user, "school", None)
+        if not school:
+            raise serializers.ValidationError(_("No school context found"))
+
+        system_name = data["system_name"]
+        scales = data.get("scales")
+
+        if system_name == "custom":
+            if not scales:
+                raise serializers.ValidationError(_("Custom system must provide scales"))
+        else:
+            scales = self.get_default_scales(system_name)
+
+        self._validate_scales(scales)
+        data["scales"] = scales
+        return data
+
+    def _validate_scales(self, scales):
+        """Validates scales for coverage, overlaps, uniqueness, and points."""
+        sorted_scales = sorted(scales, key=lambda x: x["min_score"])
+        previous_max = self.MIN_SCORE - 1
+        normalized_grades = set()
+
+        for scale in sorted_scales:
+            grade = scale.get("grade")
+            min_score = scale.get("min_score")
+            max_score = scale.get("max_score")
+            point = scale.get("point")
+
+            if not grade or not grade.strip():
+                raise serializers.ValidationError(_("Each scale must have a grade"))
+            scale["grade"] = grade.strip().upper()
+
+            if min_score is None or max_score is None:
+                raise serializers.ValidationError(_("Both min_score and max_score are required"))
+            if min_score > max_score:
+                raise serializers.ValidationError(_("Minimum score cannot exceed maximum score"))
+            if min_score < self.MIN_SCORE or max_score > self.MAX_SCORE:
+                raise serializers.ValidationError(_("Scores must be between 0 and 100"))
+            if min_score != previous_max + 1:
+                raise serializers.ValidationError(_("Gap detected before grade '%(grade)s'") % {"grade": grade})
+            if grade in normalized_grades:
+                raise serializers.ValidationError(_("Duplicate grade '%(grade)s' detected") % {"grade": grade})
+            normalized_grades.add(grade)
+            if point is None or not (0 <= point <= self.MAX_POINT):
+                raise serializers.ValidationError(_("Point for '%(grade)s' must be between 0 and 5") % {"grade": grade})
+
+            previous_max = max_score
+
+        if previous_max != self.MAX_SCORE:
+            raise serializers.ValidationError(_("Grade scales must fully cover scores up to 100"))
+
+    @transaction.atomic
+    def save_scales(self):
+        """Create or update all validated scales for the tenant."""
+        request = self.context.get("request")
+        school = getattr(request.user, "school", None)
+        created_scales = []
+
+        for index, scale in enumerate(self.validated_data["scales"]):
+            obj, _ = GradeScale.objects.update_or_create(
+                school=school,
+                grade=scale["grade"].strip().upper(),
+                defaults={
+                    "display_name": scale.get("display_name"),
+                    "min_score": scale["min_score"],
+                    "max_score": scale["max_score"],
+                    "point": scale["point"],
+                    "remark": scale.get("remark", ""),
+                    "is_honors": scale.get("is_honors", False),
+                    "order": index + 1,
+                    "is_active": True,
+                },
+            )
+            created_scales.append(obj)
+
+        return created_scales

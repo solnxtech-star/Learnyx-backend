@@ -8,14 +8,51 @@ from core.applications.academics.models import AssessmentRecord
 from core.applications.academics.models import AssessmentType
 from core.applications.academics.models import ClassRoom
 from core.applications.academics.models import ClassSchedule
+from core.applications.academics.models import StudentClassAssignment
+from core.applications.academics.models import StudentSubjectEnrollment
 from core.applications.academics.models import Subject
 from core.applications.academics.models import TeachingAssignment
 from core.applications.academics.models import TimeSlot
 from core.applications.academics.models import Timetable
 
 
+class TenantAdminMixin:
+    """
+    Reusable admin mixin for TenantAwareModel models.
+    Ensures users only see and create data within their school.
+    """
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+
+        # Superuser sees everything
+        if request.user.is_superuser:
+            return qs
+
+        # School-based restriction
+        if request.user.school:
+            return qs.filter(school=request.user.school)
+
+        return qs.none()
+
+    def save_model(self, request, obj, form, change):
+        # Automatically assign school for non-superusers
+        if not request.user.is_superuser:
+            obj.school = request.user.school
+        super().save_model(request, obj, form, change)
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        """
+        Restrict school dropdown for non-superusers.
+        """
+        if db_field.name == "school" and not request.user.is_superuser:
+            kwargs["queryset"] = db_field.related_model.objects.filter(
+                id=request.user.school_id
+            )
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
 @admin.register(AcademicSession)
-class AcademicSessionAdmin(admin.ModelAdmin):
+class AcademicSessionAdmin(TenantAdminMixin, admin.ModelAdmin):
     list_display = ("id", "name", "school", "is_active", "created_at")
     list_filter = ("school", "is_active")
     search_fields = ("name", "school__name")
@@ -24,10 +61,10 @@ class AcademicSessionAdmin(admin.ModelAdmin):
 
 @admin.register(AcademicTerm)
 class AcademicTermAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "session", "is_active", "term_type")
+    list_display = ("id", "term_number", "session", "is_active", "term_type")
     list_filter = ("is_active", "term_type")
-    search_fields = ("name", "session__name")
-    ordering = ("name",)
+    search_fields = ("session__name",)
+    ordering = ("session__name",)
 
 
 @admin.register(AssessmentPolicy)
@@ -137,3 +174,23 @@ class TimetableAdmin(admin.ModelAdmin):
     list_filter = ("school", "academic_year", "term", "is_active")
     search_fields = ("name", "academic_year", "term")
     filter_horizontal = ("schedules",)
+
+
+@admin.register(StudentSubjectEnrollment)
+class StudentSubjectEnrollmentAdmin(admin.ModelAdmin):
+    list_display = ("id", "student", "subject", "assigned_by", "session", "term")
+    list_filter = ("assigned_by", "subject")
+    search_fields = (
+        "student__user__email",
+        "student__user__name",
+        "subject__name",
+    )
+
+@admin.register(StudentClassAssignment)
+class StudentClassAssignmentAdmin(admin.ModelAdmin):
+    list_display = (
+        "id", "student", "classroom",
+        "academic_session", "academic_term", "is_active"
+    )
+    # list_filter = ("classroom", "academic_session", "academic_term", "is_active")
+    # ordering = ("academic_session", "academic_term")

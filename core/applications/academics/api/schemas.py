@@ -1,10 +1,35 @@
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiExample
 from drf_spectacular.utils import OpenApiParameter
+from drf_spectacular.utils import OpenApiResponse
 from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import extend_schema_view
 
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    AdminAssignSubjectsToStudentSerializer,
+    BulkAssessmentEntrySerializer,
+)
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    StudentCurrentClassSerializer,
+)
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    StudentDetailSerializer,
+)
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    StudentListSerializer,
+)
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    StudentPromotionSerializer,
+)
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
+    StudentUpdateSerializer,
+)
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    AssessmentEntryCreateSerializer,
     AssessmentEntrySerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    AssessmentTypeSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     ClassroomStudentSerializer,
@@ -19,6 +44,9 @@ from core.applications.academics.api.serializers.teachers_dashboard_serializers 
     StudentProfileDetailSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    StudentSubjectMatchSerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     StudentSubjectResultSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
@@ -27,7 +55,169 @@ from core.applications.academics.api.serializers.teachers_dashboard_serializers 
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     TeacherClassroomSerializer,
 )
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    TeacherSubjectSerializer,
+)
 
+STUDENT_VIEWSET_SCHEMA = extend_schema_view(
+    list=extend_schema(
+        tags=["Admin Management"],
+        summary="List students",
+        description=(
+            "Returns a list of students belonging to the authenticated user's school.\n\n"
+            "Each student includes:\n"
+            "- Basic user information\n"
+            "- Current classroom assignment\n\n"
+            "**Permissions:** Principal / School Owner only."
+        ),
+        responses={200: StudentListSerializer(many=True)},
+    ),
+
+    retrieve=extend_schema(
+        tags=["Admin Management"],
+        summary="Retrieve student details",
+        description=(
+            "Retrieve detailed information about a single student.\n\n"
+            "Includes:\n"
+            "- Student bio data\n"
+            "- Current classroom\n"
+            "- Full enrollment history (session & term aware)\n\n"
+            "**Permissions:** Principal / School Owner only."
+        ),
+        responses={
+            200: StudentDetailSerializer,
+            404: OpenApiResponse(description="Student not found"),
+        },
+    ),
+
+    # ✅ Update Profile
+    update_profile=extend_schema(
+        tags=["Admin Management"],
+        summary="Update student profile",
+        description=(
+            "Update a student's profile information including nested user data.\n\n"
+            "### Editable Fields\n"
+            "- user.name\n"
+            "- user.email\n"
+            "- user.phone_number\n"
+            "- guardian_name\n"
+            "- guardian_phone\n"
+            "- address\n"
+            "- gender\n"
+            "- admission_date\n\n"
+            "This endpoint supports **partial updates (PATCH)**.\n\n"
+            "**Permissions:** Principal / School Owner only.\n"
+            "**Multi-tenant safe:** Students must belong to the same school."
+        ),
+        request=StudentUpdateSerializer,
+        responses={
+            200: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Student profile updated successfully",
+                examples=[
+                    OpenApiExample(
+                        "Success response",
+                        value={
+                            "message": "Student profile updated successfully",
+                            "student_id": "uuid",
+                        },
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(description="Validation error"),
+            403: OpenApiResponse(description="Permission denied"),
+            404: OpenApiResponse(description="Student not found"),
+        },
+    ),
+
+    # ✅ Current Classes
+    current_classes=extend_schema(
+        tags=["Admin Management"],
+        summary="List students with current class",
+        description=(
+            "Returns all students in the authenticated user's school along with their "
+            "current academic class and classroom.\n\n"
+            "This endpoint is optimized for dashboards, dropdowns, promotion screens, "
+            "and subject assignment workflows.\n\n"
+            "**Permissions:** Principal / School Owner only."
+        ),
+        responses={200: StudentCurrentClassSerializer(many=True)},
+    ),
+
+    # ✅ Assign Subjects
+    assign_subjects=extend_schema(
+        tags=["Admin Management"],
+        summary="Assign subjects to a student",
+        description=(
+            "Assign subjects to a student for a specific academic session and term.\n\n"
+            "### Important behavior\n"
+            "- This operation **REPLACES** all existing subject assignments "
+            "for the selected session and term.\n"
+            "- Subjects must belong to the same school as the admin.\n"
+            "- Assignments are tracked with `assigned_by` for auditing.\n\n"
+            "**Permissions:** Principal / School Owner only."
+        ),
+        request=AdminAssignSubjectsToStudentSerializer,
+        responses={
+            200: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Subjects assigned successfully",
+                examples=[
+                    OpenApiExample(
+                        "Success response",
+                        value={
+                            "message": "Subjects assigned successfully",
+                            "student_id": "uuid",
+                            "count": 5,
+                        },
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(description="Validation error"),
+            404: OpenApiResponse(description="Student not found"),
+        },
+    ),
+
+    # ✅ NEW: Promote / Demote Students
+    promote_students=extend_schema(
+        tags=["Admin Management"],
+        summary="Promote or demote multiple students",
+        description=(
+            "Promote or demote multiple students to a target class and academic session.\n\n"
+            "### Request Body\n"
+            "- `student_ids` (list[int]): IDs of students to promote/demote\n"
+            "- `target_class_id` (int): Target class ID\n"
+            "- `academic_session_id` (int): Target academic session ID\n"
+            "- `reason` (str, optional): Reason for promotion/demotion\n\n"
+            "**Permissions:** Principal / School Owner only.\n"
+            "**Multi-tenant safe:** Students must belong to the same school."
+        ),
+        request=StudentPromotionSerializer,
+        responses={
+            200: OpenApiResponse(
+                response=OpenApiTypes.OBJECT,
+                description="Students promoted successfully",
+                examples=[
+                    OpenApiExample(
+                        "Success response",
+                        value={
+                            "message": "Students promoted successfully",
+                            "promoted_count": 3,
+                            "assignments": [
+                                {"student_id": 1, "classroom": "Grade 3A", "session": "2025/2026"},
+                                {"student_id": 2, "classroom": "Grade 3A", "session": "2025/2026"},
+                                {"student_id": 3, "classroom": "Grade 3A", "session": "2025/2026"},
+                            ],
+                        },
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(description="Validation error"),
+            404: OpenApiResponse(description="Student not found"),
+            403: OpenApiResponse(description="Permission denied"),
+        },
+    ),
+)
 # -------------------------------------------------------
 #   AssessmentRecordViewSet Schema
 # -------------------------------------------------------
@@ -278,6 +468,57 @@ teachers_dashboard = extend_schema_view(
     ),
 
     # =====================================================
+    # STEP 3A — Teacher Subjects (NEW)
+    # =====================================================
+    list_teacher_subjects=extend_schema(
+        summary="List subjects taught by the logged-in teacher",
+        description=(
+            "STEP 3A: Fetch subjects the teacher is authorized to teach.\n\n"
+            "This endpoint is derived from TeachingAssignment and returns "
+            "subjects scoped by classroom.\n\n"
+            "**Frontend flow:**\n"
+            "1. Call this before assessment entry.\n"
+            "2. Populate subject dropdowns per classroom.\n"
+            "3. Prevent teachers from selecting unauthorized subjects.\n\n"
+            "**Notes:**\n"
+            "- Each subject is tied to a classroom.\n"
+            "- Only active subjects are returned."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="classroom",
+                description="Optional classroom filter",
+                required=False,
+                location=OpenApiParameter.QUERY,
+            ),
+        ],
+        responses={200: TeacherSubjectSerializer(many=True)},
+        tags=["Teacher Dashboard"],
+    ),
+
+    # =====================================================
+    # STEP 3B — Assessment Types (NEW)
+    # =====================================================
+    list_assessment_types=extend_schema(
+        summary="List assessment types for the active academic term",
+        description=(
+            "STEP 3B: Fetch assessment types configured for the active academic term.\n\n"
+            "Assessment types are policy-driven and define:\n"
+            "- Allowed assessment categories (CA, Exam, Project, etc.)\n"
+            "- Score limits\n"
+            "- Weighting rules\n\n"
+            "**Frontend flow:**\n"
+            "1. Call this before submitting assessment entries.\n"
+            "2. Populate assessment type selector.\n"
+            "3. Use `max_score` and `count` for client-side hints.\n\n"
+            "**Important:**\n"
+            "All enforcement is still validated server-side."
+        ),
+        responses={200: AssessmentTypeSerializer(many=True)},
+        tags=["Teacher Dashboard"],
+    ),
+
+    # =====================================================
     # STEP 4 — Raw Assessment Entries
     # =====================================================
     student_assessments=extend_schema(
@@ -417,6 +658,96 @@ teachers_dashboard = extend_schema_view(
             ),
         ],
         responses={200: ResultSnapshotSerializer(many=True)},
+        tags=["Teacher Dashboard"],
+    ),
+
+    # =====================================================
+    # STEP 9 — Students in teacher's classrooms by subjects
+    # =====================================================
+    students_by_subject=extend_schema(
+        summary="List students in teacher-assigned classrooms matching teacher subjects",
+        description=(
+            "STEP 9: Fetch all students who are in classrooms assigned to the logged-in teacher "
+            "and are enrolled in at least one subject that the teacher teaches.\n\n"
+            "**Frontend flow:**\n"
+            "1. Call this endpoint to populate student lists filtered by subject.\n"
+            "2. Use for assessment entry or subject-specific dashboards.\n"
+            "3. Returns matched subjects per student for display.\n\n"
+            "**Permissions:** Teacher must be assigned to the classroom and subject."
+        ),
+        responses={200: StudentSubjectMatchSerializer(many=True)},
+        tags=["Teacher Dashboard"],
+    ),
+
+    # =====================================================
+    # STEP 3C — Enter Single Assessment (NEW)
+    # =====================================================
+    enter_assessment=extend_schema(
+        summary="Enter a single assessment record",
+        description=(
+            "STEP 3C: Create a single assessment entry for a student.\n\n"
+            "This endpoint allows a teacher to submit one assessment score "
+            "for a specific student and subject.\n\n"
+            "**Flow:**\n"
+            "1. Teacher selects classroom.\n"
+            "2. Teacher selects subject.\n"
+            "3. Teacher selects student.\n"
+            "4. Teacher selects assessment type (CA, Exam, etc).\n"
+            "5. Teacher submits score.\n\n"
+            "**Server-side validations include:**\n"
+            "- Teacher must be assigned to the classroom.\n"
+            "- Teacher must be assigned to teach the subject.\n"
+            "- Student must be enrolled in subject.\n"
+            "- Term must be active.\n"
+            "- Score must not exceed allowed limits.\n"
+            "- Assessment count policy enforcement.\n\n"
+            "**Side Effect:**\n"
+            "Subject results are automatically recomputed after successful entry."
+        ),
+        request=AssessmentEntryCreateSerializer,
+        responses={
+            201: AssessmentEntrySerializer,
+            400: OpenApiResponse(description="Validation error"),
+            403: OpenApiResponse(description="Permission denied"),
+        },
+        tags=["Teacher Dashboard"],
+    ),
+
+    # =====================================================
+    # STEP 3D — Enter Bulk Assessments (NEW)
+    # =====================================================
+    enter_bulk_assessments=extend_schema(
+        summary="Enter multiple assessment records in bulk",
+        description=(
+            "STEP 3D: Create multiple assessment entries in one request.\n\n"
+            "This endpoint is optimized for bulk score entry "
+            "(e.g., entering CA scores for an entire class).\n\n"
+            "**Request structure:**\n"
+            "- `subject_id`: Common subject for all entries.\n"
+            "- `entries`: List of student assessment payloads.\n\n"
+            "**Each entry must contain:**\n"
+            "- `student_id`\n"
+            "- `assessment_type_id`\n"
+            "- `score`\n\n"
+            "**Server-side validations include:**\n"
+            "- Teacher classroom authorization per student.\n"
+            "- Subject assignment validation.\n"
+            "- Enrollment verification.\n"
+            "- Term activity check.\n"
+            "- Score limit enforcement.\n"
+            "- Cumulative policy enforcement.\n\n"
+            "**Transaction behavior:**\n"
+            "- All entries are processed atomically.\n"
+            "- If one entry fails, the entire request is rolled back.\n\n"
+            "**Side Effect:**\n"
+            "Subject results are recomputed for each affected student."
+        ),
+        request=BulkAssessmentEntrySerializer,
+        responses={
+            201: AssessmentEntrySerializer(many=True),
+            400: OpenApiResponse(description="Validation error"),
+            403: OpenApiResponse(description="Permission denied"),
+        },
         tags=["Teacher Dashboard"],
     ),
 )

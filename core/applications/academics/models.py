@@ -1,97 +1,161 @@
 import auto_prefetch
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
+from core.applications.users.managers import TenantManager
 from core.helper.enums import AcademicClass
 from core.helper.enums import AcademicTrack
 from core.helper.enums import DayOfWeek
 from core.helper.enums import UserRole
+from core.helper.models import TenantAwareModel
 from core.helper.models import TimeStampedModel
 
 # Create your models here.
 
-class AcademicSession(TimeStampedModel):
-    """
-    Represents a school academic year e.g. 2024/2025.
-    """
-
-    school = auto_prefetch.ForeignKey(
-        "users.School", on_delete=models.CASCADE, related_name="academic_sessions"
-    )
+class AcademicSession(TenantAwareModel):
+    """Represents a school academic year, e.g., 2024/2025."""
     name = models.CharField(
         max_length=20, help_text=_("Name of the session e.g. 2024/2025")
     )
-    is_active = models.BooleanField(default=False)
+    start_date = models.DateField(
+        null=True, blank=True, help_text=_("Session start date")
+    )
+    end_date = models.DateField(null=True, blank=True, help_text=_("Session end date"))
+    is_active = models.BooleanField(
+        default=False,
+        verbose_name=_("Active"),
+        help_text=_("Whether this session is currently active for the school"),
+    )
 
     class Meta(auto_prefetch.Model.Meta):
-        unique_together = ("school", "name")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "name"], name="unique_session_per_school",
+            ),
+        ]
         verbose_name = _("Academic Session")
         verbose_name_plural = _("Academic Sessions")
 
     def __str__(self):
-        return self.name
+        return f"{self.name} ({self.school.name})"
+
+    def clean(self):
+        """Validate that end_date is after start_date if both are provided.
+        """
+        if self.start_date and self.end_date and self.end_date <= self.start_date:
+            raise ValidationError({"end_date": _("End date must be after start date.")})
 
 
-class AcademicTerm(TimeStampedModel):
-    """
-    Represents a division of an academic session e.g. First Term.
-    """
-
+class AcademicTerm(TenantAwareModel):
+    """Represents a term within an academic session."""
     session = auto_prefetch.ForeignKey(
         "academics.AcademicSession", on_delete=models.CASCADE, related_name="terms"
     )
-    name = models.CharField(max_length=50, help_text=_("1st Term, 2nd Term, 3rd Term"))
-    is_active = models.BooleanField(default=False)
-    term_type = models.CharField(
-        max_length=20,
-        choices=[
-            ("HALF_TERM", "Half Term"),
-            ("END_OF_TERM", "End of Term"),
-            ("FULL_TERM", "Full Term"),
-        ],
-        default="FULL_TERM",
+    term_number = models.PositiveSmallIntegerField(
+        default=1, help_text=_("Term number within the session"),
     )
+    start_date = models.DateField(default=timezone.now)
+    end_date = models.DateField(default=timezone.now)
+    is_active = models.BooleanField(default=False)
+
+    TERM_TYPES = [
+        ("HALF_TERM", "Half Term"),
+        ("END_OF_TERM", "End of Term"),
+        ("FULL_TERM", "Full Term"),
+    ]
+    term_type = models.CharField(max_length=20, choices=TERM_TYPES, default="FULL_TERM")
 
     class Meta(auto_prefetch.Model.Meta):
-        unique_together = ("session", "name")
-        verbose_name = _("Academic Term")
-        verbose_name_plural = _("Academic Terms")
+        unique_together = ("session", "term_number")
+        ordering = ["term_number"]
 
     def __str__(self):
-        return f"{self.name} - {self.session}"
+        return f"{self.get_term_display_name()} - {self.session.name}"
 
+    def get_term_display_name(self):
+        return {
+            1: "First Term", 2: "Second Term", 3: "Third Term",
+        }.get(self.term_number, f"Term {self.term_number}")
 
-class AssessmentPolicy(TimeStampedModel):
+    @property
+    def name(self):
+        return self.get_term_display_name()
+
+class TermPeriod(TenantAwareModel):
     """
-    Defines configuration for grading continuous assessments per term.
-    Example:
-        - Tests (2 occurrences) → 40%
-        - Exam (1 occurrence) → 60%
+    Represents periods within a term such as:
+    - Half Term
+    - Exams
+    - Holiday
     """
 
-    school = auto_prefetch.ForeignKey(
-        "users.School", on_delete=models.CASCADE, related_name="assessment_policies"
-    )
+    class PeriodType(models.TextChoices):
+        HALF_TERM = "HALF_TERM", _("Half Term Break")
+        EXAM = "EXAM", _("Exam Period")
+        HOLIDAY = "HOLIDAY", _("Holiday")
+        OTHER = "OTHER", _("Other")
+
     term = auto_prefetch.ForeignKey(
-        "academics.AcademicTerm", on_delete=models.CASCADE, related_name="policies"
+        "academics.AcademicTerm",
+        on_delete=models.CASCADE,
+        related_name="periods"
+    )
+
+    name = models.CharField(
+        max_length=100,
+        help_text=_("Name of the period e.g Mid-Term Break")
+    )
+
+    period_type = models.CharField(
+        max_length=20,
+        choices=PeriodType.choices
+    )
+
+    start_date = models.DateField()
+    end_date = models.DateField()
+
+    class Meta(auto_prefetch.Model.Meta):
+        ordering = ["start_date"]
+
+    def __str__(self):
+        return f"{self.name} ({self.term})"
+class AssessmentPolicy(TenantAwareModel):
+    """Defines configuration for grading continuous assessments per term."""
+    term = auto_prefetch.ForeignKey(
+        "academics.AcademicTerm", on_delete=models.CASCADE,
+        related_name="policies"
     )
     name = models.CharField(max_length=150, default="Default Policy")
     is_active = models.BooleanField(default=True)
-    ca_weight = models.PositiveIntegerField(default=40, help_text=_("Continuous Assessment weight (%)"))
-    exam_weight = models.PositiveIntegerField(default=60, help_text=_("Examination weight (%)"))
+    ca_weight = models.PositiveIntegerField(
+        default=40, help_text=_("Continuous Assessment weight (%)")
+    )
+    exam_weight = models.PositiveIntegerField(
+        default=60, help_text=_("Examination weight (%)")
+    )
 
     class Meta(auto_prefetch.Model.Meta):
         constraints = [
             models.UniqueConstraint(
                 fields=["school", "term", "is_active"],
-                condition=models.Q(is_active=True),
+                condition=Q(is_active=True),
                 name="unique_active_policy_per_school_term",
             )
         ]
         verbose_name = _("Assessment Policy")
         verbose_name_plural = _("Assessment Policies")
+
+    def clean(self):
+        if self.term.session.school != self.school:
+            raise ValidationError(_("Term must belong to the same school as the policy."))
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.school.name} - {self.term} ({self.name})"
@@ -177,10 +241,29 @@ class AssessmentRecord(TimeStampedModel):
     score = models.FloatField(null=True, blank=True)
     date_taken = models.DateField(null=True, blank=True)
 
+    objects = TenantManager()
+
     class Meta(auto_prefetch.Model.Meta):
         unique_together = ("student", "classroom_subject", "assessment_type", "index")
         verbose_name = _("Assessment Record")
         verbose_name_plural = _("Assessment Records")
+
+    def clean(self):
+        # Student and Subject must belong to same school
+        if self.student.school != self.classroom_subject.school:
+            raise ValidationError(
+                _("Student and Subject must belong to same school."),
+            )
+
+        # AssessmentType must belong to same school
+        if self.assessment_type.policy.school != self.student.school:
+            raise ValidationError(
+                _("Assessment type must belong to same school."),
+            )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.student} - {self.assessment_type.name} {self.index}"
@@ -193,7 +276,7 @@ class AssessmentRecord(TimeStampedModel):
         return (self.score / self.assessment_type.max_score) * 100
 
 
-class Subject(TimeStampedModel):
+class Subject(TenantAwareModel):
     """
     Represents an academic subject offered by a school
     (e.g., Mathematics, Physics, Literature).
@@ -201,13 +284,6 @@ class Subject(TimeStampedModel):
     Subjects are scoped to a school and can be assigned
     to one or more classrooms.
     """
-
-    school = auto_prefetch.ForeignKey(
-        "users.School",
-        on_delete=models.CASCADE,
-        related_name="subjects",
-        help_text="School that owns and manages this subject.",
-    )
 
     name = models.CharField(
         max_length=100,
@@ -261,6 +337,7 @@ class Subject(TimeStampedModel):
             "Inactive subjects are soft-deleted and hidden from normal listings."
         ),
     )
+    objects = TenantManager()
 
     class Meta(auto_prefetch.Model.Meta):
         ordering = ["name"]
@@ -284,13 +361,89 @@ class Subject(TimeStampedModel):
         ]
 
     def __str__(self):
-        return f"{self.code} - {self.name}"
+        return f"{self.name}"
 
-class ClassRoom(TimeStampedModel):
+
+class StudentSubjectEnrollment(TimeStampedModel):
+    """
+    Tracks subjects assigned to each student.
+
+    This allows:
+        - Different students in the same class to take different subjects
+        - Tracking who assigned the subject and when
+        - Future support for grades, electives, and promotions
+    """
+
+    student = models.ForeignKey(
+        "users.StudentProfile",
+        on_delete=models.CASCADE,
+        related_name="subject_enrollments",
+    )
+
+    subject = models.ForeignKey(
+        "academics.Subject",
+        on_delete=models.CASCADE,
+        related_name="student_enrollments",
+    )
+
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="Admin or staff who assigned this subject",
+    )
+
+    session = models.ForeignKey(
+        "academics.AcademicSession",
+        on_delete=models.CASCADE,
+        related_name="student_subject_enrollments",
+        help_text="Session in which this subject is assigned",
+    )
+
+    term = models.ForeignKey(
+        "academics.AcademicTerm",
+        on_delete=models.CASCADE,
+        related_name="student_subject_enrollments",
+        help_text="Term in which this subject is assigned",
+    )
+    objects = TenantManager()
+
+    class Meta(auto_prefetch.Model.Meta):
+        unique_together = ("student", "subject", "session", "term")
+        ordering = ["student", "subject"]
+
+    def clean(self):
+        if self.student.school != self.subject.school:
+            raise ValidationError(_("Student and Subject must belong to same school."))
+
+        if self.session.school != self.student.school:
+            raise ValidationError(_("Session must belong to same school."))
+
+        if self.term.session.school != self.student.school:
+            raise ValidationError(_("Term must belong to same school."))
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.student} → {self.subject} ({self.session} - {self.term})"
+
+
+class ClassRoom(TenantAwareModel):
     school = auto_prefetch.ForeignKey(
         "users.School",
         on_delete=models.CASCADE,
         related_name="classrooms",
+    )
+    form_teacher = auto_prefetch.ForeignKey(
+        "users.TeacherProfile",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="form_classes",
+        help_text="Teacher assigned as the form teacher for this class",
     )
 
     academic_class = models.CharField(
@@ -308,13 +461,55 @@ class ClassRoom(TimeStampedModel):
         choices=AcademicTrack.choices, default=AcademicTrack.SCIENCE,
         help_text="Academic track (Science, Arts, or Commercial)",
     )
-
+    objects = TenantManager()
     class Meta(auto_prefetch.Model.Meta):
         unique_together = ("school", "academic_class", "arm")
         ordering = ["academic_class", "arm"]
 
     def __str__(self):
         return f"{self.academic_class} {self.arm}"
+
+class StudentClassAssignment(TimeStampedModel):
+    student = auto_prefetch.ForeignKey(
+        "users.StudentProfile", on_delete=models.CASCADE,
+        related_name="class_assignments",
+    )
+    classroom = auto_prefetch.ForeignKey(
+        "academics.ClassRoom", on_delete=models.CASCADE,
+        related_name="student_assignments",
+    )
+    academic_session = auto_prefetch.ForeignKey(
+        "academics.AcademicSession", on_delete=models.CASCADE,
+    )
+    academic_term = auto_prefetch.ForeignKey(
+        "academics.AcademicTerm", null=True, blank=True,
+        on_delete=models.SET_NULL,
+    )
+    is_active = models.BooleanField(default=True)  # indicates current active class
+    objects = TenantManager()
+    class Meta(auto_prefetch.Model.Meta):
+        unique_together = ("student", "classroom", "academic_session")
+
+    def clean(self):
+        if self.student.school != self.classroom.school:
+            raise ValidationError(
+                _("Student and Classroom must belong to same school.")
+            )
+
+        if self.academic_session.school != self.classroom.school:
+            raise ValidationError(
+                _("Session must belong to same school as classroom.")
+            )
+
+        if self.academic_term and \
+           self.academic_term.session.school != self.classroom.school:
+            raise ValidationError(
+                _("Term must belong to same school.")
+            )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
 
 
 class TeachingAssignment(TimeStampedModel):
@@ -342,7 +537,7 @@ class TeachingAssignment(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="teaching_assignments",
     )
-
+    objects = TenantManager()
     class Meta(auto_prefetch.Model.Meta):
         db_table = "teaching_assignments"
         verbose_name = "Teaching Assignment"
@@ -391,6 +586,7 @@ class TimeSlot(TimeStampedModel):
     end_time = models.TimeField()
     is_break = models.BooleanField(default=False)
     order = models.PositiveIntegerField(default=0)
+    objects = TenantManager()
 
     class Meta(auto_prefetch.Model.Meta):
         db_table = "time_slots"
@@ -476,7 +672,6 @@ class ClassSchedule(TimeStampedModel):
             raise ValidationError(_("Break periods cannot have subjects or teachers."))
 
         if not self.time_slot.is_break and not self.subject:
-            raise ValidationError(_("Non-break periods must have a subject."))
             raise ValidationError(_("Non-break periods must have a subject."))
 
 class Timetable(TimeStampedModel):
