@@ -17,6 +17,7 @@ from core.helper.enums import AdminType
 from core.helper.enums import AdmissionStatus
 from core.helper.enums import Gender
 from core.helper.enums import UserRole
+from core.helper.media import MediaHelper
 from core.helper.models import TenantAwareModel
 from core.helper.models import TimeStampedModel
 
@@ -185,6 +186,11 @@ class TeacherProfile(BaseProfile):
 # Student Profile
 # --------------------------
 class StudentProfile(BaseProfile):
+    photo = models.ImageField(
+        upload_to=MediaHelper.get_image_upload_path,
+        blank=True,
+        null=True
+    )
     classroom = auto_prefetch.ForeignKey(
         "academics.ClassRoom", on_delete=models.SET_NULL,
         null=True, blank=True, related_name="students",

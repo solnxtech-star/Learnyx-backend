@@ -33,6 +33,8 @@ from rest_framework_simplejwt.settings import api_settings
 from core.applications.users.api.schemas import user_schema
 from core.applications.users.api.serializers.serializers import (
     CustomAdminCreateSerializer,
+    StudentOnboardingSerializer,
+    StudentPhotoUploadSerializer,
 )
 from core.applications.users.api.serializers.serializers import (
     CustomTeacherCreateSerializer,
@@ -484,6 +486,66 @@ class UserViewSet(ModelViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="student/complete-onboarding",
+        permission_classes=[IsAuthenticated],
+    )
+    def complete_student_onboarding(self, request):
+        """
+        Final step of the student registration process.
+
+        This endpoint allows a newly registered student to complete their
+        onboarding by providing additional profile information and selecting
+        a classroom.
+
+        Returns
+        -------
+        • Confirmation message
+        • Generated student ID
+        • Assigned classroom ID (if any)
+        """
+
+        serializer = StudentOnboardingSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+
+        serializer.is_valid(raise_exception=True)
+        profile = serializer.save()
+
+        return Response(
+            {
+                "message": "Student onboarding completed successfully.",
+                "student_id": profile.student_id,
+                "classroom": profile.classroom.id if profile.classroom else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="upload-photo",
+        url_name="upload_photo"
+    )
+    def upload_photo(self, request):
+        """
+        Endpoint to upload or update the student's profile photo.
+        """
+        serializer = StudentPhotoUploadSerializer(
+            data=request.data,
+            context={"request": request}
+        )
+        if serializer.is_valid():
+            profile = serializer.save()
+            return Response(
+                {"message": "Photo uploaded successfully."},
+                status=status.HTTP_200_OK
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(
         detail=False,
