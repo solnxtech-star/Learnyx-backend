@@ -6,6 +6,7 @@ from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth import user_logged_out
 from django.utils.module_loading import import_string
 from django.utils.timezone import now
+from core.applications.academics.models import StudentClassAssignment
 from djoser import signals
 from djoser import utils
 from djoser.compat import get_user_email
@@ -491,36 +492,26 @@ class UserViewSet(ModelViewSet):
         detail=False,
         methods=["post"],
         url_path="student/complete-onboarding",
-        permission_classes=[IsAuthenticated],
+        permission_classes=[AllowAny],  # no authentication required
     )
     def complete_student_onboarding(self, request):
         """
         Final step of the student registration process.
-
-        This endpoint allows a newly registered student to complete their
-        onboarding by providing additional profile information and selecting
-        a classroom.
-
-        Returns
-        -------
-        • Confirmation message
-        • Generated student ID
-        • Assigned classroom ID (if any)
         """
-
-        serializer = StudentOnboardingSerializer(
-            data=request.data,
-            context={"request": request},
-        )
-
+        serializer = StudentOnboardingSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         profile = serializer.save()
+
+        # Fetch latest active classroom assignment if any
+        assignment = StudentClassAssignment.objects.filter(
+            student=profile, is_active=True
+        ).first()
 
         return Response(
             {
                 "message": "Student onboarding completed successfully.",
                 "student_id": profile.student_id,
-                "classroom": profile.classroom.id if profile.classroom else None,
+                "classroom_id": assignment.classroom.id if assignment else None,
             },
             status=status.HTTP_200_OK,
         )
@@ -529,23 +520,20 @@ class UserViewSet(ModelViewSet):
         detail=False,
         methods=["post"],
         url_path="upload-photo",
-        url_name="upload_photo"
+        url_name="upload_photo",
+        permission_classes=[AllowAny],  # no authentication required
     )
     def upload_photo(self, request):
         """
-        Endpoint to upload or update the student's profile photo.
+        Upload or update the student's profile photo.
         """
-        serializer = StudentPhotoUploadSerializer(
-            data=request.data,
-            context={"request": request}
+        serializer = StudentPhotoUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        profile = serializer.save()
+        return Response(
+            {"message": "Photo uploaded successfully."},
+            status=status.HTTP_200_OK
         )
-        if serializer.is_valid():
-            profile = serializer.save()
-            return Response(
-                {"message": "Photo uploaded successfully."},
-                status=status.HTTP_200_OK
-            )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(
         detail=False,

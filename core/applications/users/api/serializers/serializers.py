@@ -365,16 +365,17 @@ class StudentOnboardingSerializer(serializers.Serializer):
     Responsibilities
     ----------------
     • Update StudentProfile fields.
-    • Validate classroom belongs to the student's school.
+    • Validate classroom belongs to the user's school.
     • Assign the student to a classroom for the active academic session.
     • Ensure only one active classroom assignment exists.
 
     Security
     --------
-    • Only authenticated users with the STUDENT role can access this endpoint.
-    • Classroom lookups are restricted to the student's school.
+    • The user must exist in the system.
+    • Classroom lookups are restricted to the user's school.
     """
 
+    user_id = serializers.IntegerField(required=True)  # User must be provided
     gender = serializers.ChoiceField(choices=Gender.choices, required=False)
     classroom_id = serializers.CharField(required=False, allow_blank=True)
 
@@ -388,31 +389,30 @@ class StudentOnboardingSerializer(serializers.Serializer):
         Validate request data and resolve related objects.
 
         Ensures:
-        • Authenticated user is a student.
+        • User exists.
         • Student profile exists.
-        • Classroom (if provided) belongs to the student's school.
+        • Classroom (if provided) belongs to the user's school.
         """
+        user_id = attrs.get("user_id")
+        user = User.objects.filter(userId=user_id).first()
 
-        request = self.context["request"]
-        user = request.user
+        if not user:
+            raise CustomError.NotFound({"user_id": "User not found."})
 
-        # Ensure only students can access this endpoint
+        # Optional: ensure user role is STUDENT
         if user.role != UserRole.STUDENT:
             raise CustomError.BadRequest(
                 {"detail": "Only students are allowed to complete onboarding."}
             )
 
-        # Retrieve student profile
         profile = getattr(user, "studentprofile", None)
         if not profile:
-            raise CustomError.NotFound(
-                {"profile": "Student profile could not be found."}
-            )
+            raise CustomError.NotFound({"profile": "Student profile could not be found."})
 
         self.profile = profile
         self.classroom = None
 
-        # Validate classroom_id
+        # Validate classroom if provided
         classroom_id = attrs.get("classroom_id")
         if classroom_id:
             classroom = (
@@ -437,7 +437,6 @@ class StudentOnboardingSerializer(serializers.Serializer):
         2. Assign the student to a classroom (if provided).
         3. Ensure only one active StudentClassAssignment exists.
         """
-
         profile = self.profile
         data = self.validated_data
 
@@ -464,7 +463,6 @@ class StudentOnboardingSerializer(serializers.Serializer):
         # Classroom assignment
         # -----------------------------
         if self.classroom:
-            # Sync classroom fields on the profile
             profile.sync_current_class_fields(self.classroom)
 
             # Retrieve the active academic session
@@ -478,13 +476,13 @@ class StudentOnboardingSerializer(serializers.Serializer):
                     {"academic_session": "No active academic session found."}
                 )
 
-            # Deactivate any existing active assignments
+            # Deactivate existing active assignments
             StudentClassAssignment.objects.filter(
                 student=profile,
                 is_active=True,
             ).update(is_active=False)
 
-            # Create a new classroom assignment
+            # Create new assignment
             StudentClassAssignment.objects.create(
                 student=profile,
                 classroom=self.classroom,
@@ -495,10 +493,40 @@ class StudentOnboardingSerializer(serializers.Serializer):
         return profile
 
 class StudentPhotoUploadSerializer(serializers.Serializer):
+    """
+    Handles uploading a photo for a student's profile.
+
+    Security
+    --------
+    • Ensures the user exists in the system.
+    • Ensures the user has a student profile.
+    """
+
+    user_id = serializers.IntegerField(required=True)  # Integer PK
     photo = serializers.ImageField(required=True)
 
+    def validate(self, attrs):
+        """
+        Ensure the user exists and has a student profile.
+        """
+        user_id = attrs.get("user_id")
+        user = User.objects.filter(userId=user_id).first()
+
+        if not user:
+            raise CustomError.NotFound({"user_id": "User not found."})
+
+        profile = getattr(user, "studentprofile", None)
+        if not profile:
+            raise CustomError.NotFound({"profile": "Student profile not found."})
+
+        self.profile = profile
+        return attrs
+
     def save(self, **kwargs):
-        profile = self.context["request"].user.studentprofile
+        """
+        Save the uploaded photo to the student's profile.
+        """
+        profile = self.profile
         profile.photo = self.validated_data["photo"]
         profile.save(update_fields=["photo"])
         return profile
