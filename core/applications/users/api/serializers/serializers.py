@@ -394,7 +394,7 @@ class StudentOnboardingSerializer(serializers.Serializer):
         • Classroom (if provided) belongs to the user's school.
         """
         user_id = attrs.get("user_id")
-        user = User.objects.filter(userId=user_id).first()
+        user = User.objects.filter(id=user_id).first()
 
         if not user:
             raise CustomError.NotFound({"user_id": "User not found."})
@@ -510,7 +510,7 @@ class StudentPhotoUploadSerializer(serializers.Serializer):
         Ensure the user exists and has a student profile.
         """
         user_id = attrs.get("user_id")
-        user = User.objects.filter(userId=user_id).first()
+        user = User.objects.filter(id=user_id).first()
 
         if not user:
             raise CustomError.NotFound({"user_id": "User not found."})
