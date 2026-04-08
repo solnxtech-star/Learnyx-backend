@@ -134,7 +134,25 @@ class BaseProfile(TimeStampedModel):
         max_length=20, choices=AdmissionStatus.choices,
         default=AdmissionStatus.PENDING
     )
-    approved_by = models.CharField(max_length=100, blank=True, null=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="%(class)s_approved"
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+    settings.AUTH_USER_MODEL,
+    on_delete=models.SET_NULL,
+    null=True,
+    blank=True,
+    related_name="%(class)s_reviewed"
+)
+
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    review_comment = models.TextField(blank=True, null=True)
 
     @property
     def school(self):

@@ -1,12 +1,17 @@
 # report/serializers.py
 
-from core.applications.grading.api.serializers.grade_student_serializer import GradingKeySerializer
-from rest_framework import serializers
 from django.utils.translation import gettext_lazy as _
+from rest_framework import serializers
 
+from core.applications.academics.models import AcademicTerm
+from core.applications.academics.models import ClassRoom
+from core.applications.grading.api.serializers.grade_student_serializer import (
+    GradingKeySerializer,
+)
+from core.applications.grading.models import SubjectResult
+from core.applications.grading.models import TeacherComment
+from core.applications.grading.models import TermReportSummary
 from core.applications.users.models import StudentProfile
-from core.applications.academics.models import AcademicTerm, ClassRoom
-from core.applications.grading.models import SubjectResult, TeacherComment, TermReportSummary
 
 
 class StudentReportDataSerializer(serializers.Serializer):

@@ -8,7 +8,8 @@ from django.utils.translation import gettext_lazy as _
 
 from core.applications.academics.models import AcademicTerm
 from core.applications.academics.models import AssessmentRecord
-from core.helper.models import TenantAwareModel, TimeStampedModel
+from core.helper.models import TenantAwareModel
+from core.helper.models import TimeStampedModel
 
 # Create your models here.
 
@@ -230,7 +231,6 @@ class GradeScale(TenantAwareModel):
 
     is_published = models.BooleanField(default=False)
 
-    # ✅ EXISTING FIELDS — unchanged
     grade = models.CharField(max_length=3)
     display_name = models.CharField(
         max_length=50, null=True, blank=True, help_text=_("e.g., A' for honors")

@@ -231,6 +231,12 @@ class AssessmentRecord(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="assessment_records",
     )
+    period = models.ForeignKey(
+        "academics.TermPeriod",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
     classroom_subject = auto_prefetch.ForeignKey(
         "academics.Subject", on_delete=models.CASCADE, related_name="assessment_records"
     )

@@ -321,7 +321,14 @@ class AssessmentValidationMixin:
                 )
             })
 
-    def validate_score(self, student, subject, assessment_type, score, instance=None):
+    def validate_assessment_score(
+        self,
+        student,
+        subject,
+        assessment_type,
+        score,
+        instance=None,
+    ):
         if score < 0:
             raise serializers.ValidationError({
                 "score": "Score cannot be negative."
@@ -330,8 +337,7 @@ class AssessmentValidationMixin:
         if score > assessment_type.max_score:
             raise serializers.ValidationError({
                 "score": (
-                    f"Score cannot exceed "
-                    f"{assessment_type.max_score}."
+                    f"Score cannot exceed {assessment_type.max_score}."
                 )
             })
 
@@ -371,8 +377,13 @@ class AssessmentValidationMixin:
 # -----------------------------
 class AssessmentEntryCreateSerializer(
     serializers.ModelSerializer,
-    AssessmentValidationMixin
+    AssessmentValidationMixin,
 ):
+    """
+    Handles creation and update of a single assessment record.
+    Includes full domain validation via mixin.
+    """
+
     student = serializers.PrimaryKeyRelatedField(
         queryset=StudentProfile.objects.all()
     )
@@ -402,8 +413,11 @@ class AssessmentEntryCreateSerializer(
         assessment_type = attrs["assessment_type"]
         score = attrs["score"]
 
-        self.validate_student_subject_term(student, subject, assessment_type)
-        self.validate_score(
+        self.validate_student_subject_term(
+            student, subject, assessment_type
+        )
+
+        self.validate_assessment_score(
             student,
             subject,
             assessment_type,
@@ -426,16 +440,25 @@ class AssessmentEntryCreateSerializer(
         return AssessmentRecord.objects.create(**validated_data)
 
     def update(self, instance, validated_data):
-        subject = validated_data.get("subject", instance.classroom_subject)
-        student = validated_data.get("student", instance.student)
+        subject = validated_data.get(
+            "subject",
+            instance.classroom_subject,
+        )
+        student = validated_data.get(
+            "student",
+            instance.student,
+        )
         assessment_type = validated_data.get(
             "assessment_type",
             instance.assessment_type,
         )
         score = validated_data.get("score", instance.score)
 
-        self.validate_student_subject_term(student, subject, assessment_type)
-        self.validate_score(
+        self.validate_student_subject_term(
+            student, subject, assessment_type
+        )
+
+        self.validate_assessment_score(
             student,
             subject,
             assessment_type,
@@ -443,20 +466,27 @@ class AssessmentEntryCreateSerializer(
             instance=instance,
         )
 
+        instance.student = student
+        instance.assessment_type = assessment_type
+        instance.classroom_subject = subject
         instance.score = score
         instance.date_taken = validated_data.get(
             "date_taken",
             instance.date_taken,
         )
+
         instance.save()
 
         return instance
-
 # -----------------------------
 # Bulk entry serializer
 # -----------------------------
 
 class BulkAssessmentEntryItemSerializer(serializers.Serializer):
+    """
+    Represents a single entry inside a bulk request.
+    """
+
     student_id = serializers.PrimaryKeyRelatedField(
         queryset=StudentProfile.objects.all(),
         source="student",
@@ -468,10 +498,15 @@ class BulkAssessmentEntryItemSerializer(serializers.Serializer):
     )
 
     score = serializers.FloatField(min_value=0)
+
 class BulkAssessmentEntrySerializer(
     serializers.Serializer,
-    AssessmentValidationMixin
+    AssessmentValidationMixin,
 ):
+    """
+    Bulk creation of assessment records for multiple students.
+    """
+
     subject_id = serializers.PrimaryKeyRelatedField(
         queryset=Subject.objects.filter(is_active=True),
         source="subject",
@@ -480,10 +515,30 @@ class BulkAssessmentEntrySerializer(
     entries = BulkAssessmentEntryItemSerializer(many=True)
 
     def validate(self, attrs):
-        if not attrs["entries"]:
+        subject = attrs["subject"]
+        entries = attrs["entries"]
+
+        if not entries:
             raise serializers.ValidationError({
                 "entries": "Entries list cannot be empty."
             })
+
+        for entry in entries:
+            student = entry["student"]
+            assessment_type = entry["assessment_type"]
+            score = entry["score"]
+
+            self.validate_student_subject_term(
+                student, subject, assessment_type
+            )
+
+            self.validate_assessment_score(
+                student,
+                subject,
+                assessment_type,
+                score,
+            )
+
         return attrs
 
     def create(self, validated_data):
@@ -497,14 +552,6 @@ class BulkAssessmentEntrySerializer(
                 student = entry["student"]
                 assessment_type = entry["assessment_type"]
                 score = entry["score"]
-
-                self.validate_student_subject_term(
-                    student, subject, assessment_type
-                )
-
-                self.validate_score(
-                    student, subject, assessment_type, score
-                )
 
                 record = AssessmentRecord.objects.create(
                     student=student,
@@ -521,6 +568,7 @@ class BulkAssessmentEntrySerializer(
                 created_records.append(record)
 
         return created_records
+
 class AssessmentEntrySerializer(serializers.ModelSerializer):
     """
     Read-only serializer for assessment records.

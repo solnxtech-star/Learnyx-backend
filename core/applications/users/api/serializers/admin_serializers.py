@@ -17,16 +17,23 @@ from core.helper.enums import AdmissionStatus
 
 logger = logging.getLogger(__name__)
 
+class UserInfoMixin(serializers.Serializer):
+    """
+    Reusable mixin to expose common user fields.
+    Keeps serializers DRY and consistent.
+    """
 
-class StudentProfileListSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(source="user.email", read_only=True)
+    name = serializers.CharField(source="user.name", read_only=True)
+    phone_number = serializers.CharField(
+        source="user.phone_number", read_only=True
+    )
+
+class StudentProfileListSerializer(UserInfoMixin, serializers.ModelSerializer):
     """
     Serializer for listing student profiles along with linked user information.
     Used in admin listing views.
     """
-
-    email = serializers.EmailField(source="user.email")
-    name = serializers.CharField(source="user.name")
-    phone_number = serializers.CharField(source="user.phone_number")
 
     class Meta:
         model = StudentProfile
@@ -46,15 +53,11 @@ class StudentProfileListSerializer(serializers.ModelSerializer):
         ]
 
 
-class TeacherProfileListSerializer(serializers.ModelSerializer):
+class TeacherProfileListSerializer(UserInfoMixin, serializers.ModelSerializer):
     """
     Serializer for listing teachers with full profile details
     including their professional and departmental information.
     """
-
-    email = serializers.EmailField(source="user.email")
-    name = serializers.CharField(source="user.name")
-    phone_number = serializers.CharField(source="user.phone_number")
 
     class Meta:
         model = TeacherProfile
@@ -72,14 +75,10 @@ class TeacherProfileListSerializer(serializers.ModelSerializer):
         ]
 
 
-class AdminProfileListSerializer(serializers.ModelSerializer):
+class AdminProfileListSerializer(UserInfoMixin, serializers.ModelSerializer):
     """
     Serializer for listing admin profiles within a school.
     """
-
-    email = serializers.EmailField(source="user.email")
-    name = serializers.CharField(source="user.name")
-
     class Meta:
         model = AdminProfile
         fields = [
@@ -95,30 +94,27 @@ class AdminProfileListSerializer(serializers.ModelSerializer):
 
 class UserActivationSerializer(serializers.Serializer):
     """
-    Serializer to approve/reject a profile (student, teacher, admin).
-
-    Payload example:
-    {
-        "type": "student",
-        "action": "approve",
-        "reason": "Documents verified"
-    }
+    Serializer to manage profile review workflow (approve, reject, request changes).
+    Delegates business logic to ProfileActivationService.
     """
 
+    ACTION_CHOICES = ("approve", "reject", "request_changes")
+    PROFILE_TYPES = ("student", "teacher", "admin")
+
     type = serializers.ChoiceField(
-        choices=["student", "teacher", "admin"],
+        choices=PROFILE_TYPES,
         help_text=_("Profile type"),
     )
 
     action = serializers.ChoiceField(
-        choices=["approve", "reject"],
+        choices=ACTION_CHOICES,
         help_text=_("Action to perform"),
     )
 
     reason = serializers.CharField(
         required=False,
         allow_blank=True,
-        help_text=_("Optional reason"),
+        help_text=_("Reason (required for rejection or change request)"),
     )
 
     MODEL_MAP = {
@@ -132,14 +128,20 @@ class UserActivationSerializer(serializers.Serializer):
     # --------------------------------------------------
     def validate(self, attrs):
         request = self.context.get("request")
-        if request is None:
+        if not request:
             raise ValidationError(_("Request is required in serializer context."))
 
         profile_id = self.context.get("profile_id")
         if not profile_id:
-            raise ValidationError({"id": _("Profile ID is required in URL parameter.")})
+            raise ValidationError(
+                {"id": _("Profile ID is required in URL parameter.")}
+            )
 
-        model = self.MODEL_MAP[attrs["type"]]
+        profile_type = attrs["type"]
+        action = attrs["action"]
+        reason = (attrs.get("reason") or "").strip()
+
+        model = self.MODEL_MAP[profile_type]
 
         instance = (
             model.objects
@@ -150,32 +152,42 @@ class UserActivationSerializer(serializers.Serializer):
 
         if not instance:
             raise ValidationError(
-                {"id": _("Profile not found for the given type.")},
+                {"id": _("Profile not found for the given type.")}
             )
 
         # Multi-tenancy guard
         if instance.school != request.user.school:
             raise ValidationError(
-                _("You do not have permission to manage profiles outside your school."),
+                _("You do not have permission to manage profiles outside your school.")
             )
 
-        # Defensive guard (also enforced in service)
-        if (
-            instance.status == AdmissionStatus.APPROVED
-            and attrs["action"] == "approve"
-        ):
+        # -----------------------------
+        # Enforce reason rules
+        # -----------------------------
+        if action in {"reject", "request_changes"} and not reason:
+            raise ValidationError(
+                {"reason": _("A reason is required for this action.")}
+            )
+
+        # -----------------------------
+        # Prevent redundant actions
+        # -----------------------------
+        if instance.status == AdmissionStatus.APPROVED and action == "approve":
             raise ValidationError(_("Profile is already approved."))
 
+        # Attach resolved + normalized values
         attrs["instance"] = instance
+        attrs["reason"] = reason
+
         return attrs
 
     # --------------------------------------------------
-    # Delegation only
+    # Delegation only (Service Layer)
     # --------------------------------------------------
     def save(self, **kwargs):
         return ProfileActivationService.activate(
             profile=self.validated_data["instance"],
-            action=self.validated_data["action"],
+            action=self.validated_data["action"],  # must match service
             actor=self.context["request"].user,
             reason=self.validated_data.get("reason", ""),
         )

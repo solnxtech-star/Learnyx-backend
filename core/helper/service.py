@@ -1,7 +1,13 @@
+import logging
+from collections import defaultdict
 from decimal import Decimal
+from typing import Dict
+from typing import List
+from typing import Tuple
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Avg
 from django.db.models import Sum
 
 from core.applications.academics.models import AcademicTerm
@@ -15,359 +21,330 @@ from core.applications.grading.models import TermReportSummary
 from core.applications.users.models import StudentProfile as Student
 
 # ---------------------------------------------------------------------
-# Grade Mapping
+# Logger setup
+# ---------------------------------------------------------------------
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# ---------------------------------------------------------------------
+# GRADE SCALE LOADER
 # ---------------------------------------------------------------------
 
-def map_grade_and_point(
-    *,
-    school,
-    score: float,
-) -> tuple[str | None, Decimal | None, str | None]:
+def load_grade_scales(school_id: int) -> List[GradeScale]:
     """
-    Convert a numeric score into grade, grade point, and remark
-    using the active & published GradeScale for the school.
+    Load active and published grade scales for a school, ordered by max_score desc and then by order asc.
+    This ensures that the highest grade scale is evaluated first when mapping scores to grades.
+    Returns a list of GradeScale objects with only the necessary fields loaded.
     """
-
-    scales = (
+    logger.info(f"Loading grade scales for school_id={school_id}")
+    scales = list(
         GradeScale.objects.filter(
-            school=school,
+            school_id=school_id,
             is_active=True,
-            is_published=True,   # ✅ IMPORTANT
+            is_published=True,
         )
+        .only("min_score", "max_score", "grade", "point", "remark")
         .order_by("-max_score", "order")
     )
+    logger.info(f"Loaded {len(scales)} grade scales for school_id={school_id}")
+    return scales
 
+def map_grade(score: Decimal, scales: List[GradeScale]) -> Tuple[str, Decimal, str]:
+    """
+    Map a numeric score to a grade and grade point using the provided grade scales.
+    The scales should be ordered by max_score descending to ensure correct mapping.
+    Returns a tuple of (grade, grade_point, remark). If no scale matches, returns (None, None, None).
+    """
     for scale in scales:
         if scale.min_score <= score <= scale.max_score:
-            return (
-                scale.grade,
-                Decimal(str(scale.point)),
-                scale.remark,
-            )
-
+            logger.debug(f"Score {score} mapped to grade {scale.grade} (point {scale.point})")
+            return scale.grade, scale.point, scale.remark
+    logger.warning(f"Score {score} did not match any grade scale")
     return None, None, None
 
-
 # ---------------------------------------------------------------------
-# Assessment Computation
-# ---------------------------------------------------------------------
-
-def _calculate_assessment_components(
-    *,
-    student: Student,
-    classroom_subject: Subject,
-    policy: AssessmentPolicy,
-) -> tuple[float, float, float]:
-    """
-    Compute:
-        - total_ca (0–100)
-        - exam_score (0–100)
-        - half_term_score (0–100)
-    """
-
-    total_ca = Decimal("0")
-    exam_score = Decimal("0")
-    half_term_score = Decimal("0")
-
-    assessment_types = policy.assessment_types.all().order_by("order")
-
-    for assessment_type in assessment_types:
-        records = AssessmentRecord.objects.filter(
-            student=student,
-            classroom_subject=classroom_subject,
-            assessment_type=assessment_type,
-        )
-
-        if not records.exists():
-            if assessment_type.is_optional:
-                continue
-            average_percentage = Decimal("0")
-        else:
-            total_percentage = sum(
-                Decimal(record.percentage_score or 0)
-                for record in records
-            )
-            average_percentage = total_percentage / Decimal(records.count())
-
-        if assessment_type.category == "EXAM":
-            exam_score = average_percentage
-
-        elif assessment_type.category == "HALF_TERM":
-            half_term_score = average_percentage
-
-        else:
-            # CA components are weighted INSIDE CA only
-            weight_fraction = Decimal(assessment_type.weight) / Decimal("100")
-            total_ca += average_percentage * weight_fraction
-
-    return (
-        float(total_ca),
-        float(exam_score),
-        float(half_term_score),
-    )
-
-
-# ---------------------------------------------------------------------
-# Score Calculations
+# POLICY LOADER
 # ---------------------------------------------------------------------
 
-def _calculate_final_score(
-    *,
-    total_ca: float,
-    exam_score: float,
-    half_term_score: float,
-    term: AcademicTerm,
-    policy: AssessmentPolicy,
-) -> float:
+def load_policy(school_id: int, term_id: int) -> AssessmentPolicy:
     """
-    Calculate final score based on term type.
+    Load the active assessment policy for a given school and term.
+    Returns an AssessmentPolicy object with only the necessary fields loaded.
+    Raises ValidationError if no active policy is found.
     """
 
-    if term.term_type == "END_OF_TERM":
-        final_score = (
-            (total_ca * policy.ca_weight) / 100
-            + (exam_score * policy.exam_weight) / 100
-        )
-
-    elif term.term_type == "HALF_TERM":
-        # ✅ FIX: Half-term is CA ONLY
-        final_score = total_ca
-
-    else:  # FULL_TERM or fallback
-        final_score = total_ca + exam_score
-
-    return min(float(final_score), 100.0)
-
-
-def _calculate_average_score(
-    *,
-    total_ca: float,
-    half_term_score: float,
-    term: AcademicTerm,
-) -> float | None:
-    """
-    Average score applies ONLY to HALF_TERM.
-    """
-
-    if term.term_type != "HALF_TERM":
-        return None
-
-    scores = [total_ca]
-
-    if half_term_score:
-        scores.append(half_term_score)
-
-    return sum(scores) / len(scores)
-
-
-# ---------------------------------------------------------------------
-# Subject Result Computation
-# ---------------------------------------------------------------------
-
-@transaction.atomic
-def compute_subject_result(
-    *,
-    student: Student,
-    classroom_subject: Subject,
-    term: AcademicTerm,
-) -> SubjectResult:
-    """
-    Compute and persist a SubjectResult.
-    SINGLE source of truth.
-    """
-
-    school = classroom_subject.school
-
+    logger.info(f"Loading assessment policy for school_id={school_id}, term_id={term_id}")
     policy = (
         AssessmentPolicy.objects.filter(
-            school=school,
-            term=term,
-            is_active=True,
+            school_id=school_id,
+            term_id=term_id,
+            is_active=True
         )
+        .only("ca_weight", "exam_weight")
         .first()
     )
-
     if not policy:
-        msg = "No active assessment policy configured for this term."
-        raise ValidationError(
-            msg
-        )
-
-    # -------------------------------
-    # Compute assessment components
-    # -------------------------------
-    total_ca, exam_score, half_term_score = _calculate_assessment_components(
-        student=student,
-        classroom_subject=classroom_subject,
-        policy=policy,
-    )
-
-    total_score = _calculate_final_score(
-        total_ca=total_ca,
-        exam_score=exam_score,
-        half_term_score=half_term_score,
-        term=term,
-        policy=policy,
-    )
-
-    average_score = _calculate_average_score(
-        total_ca=total_ca,
-        half_term_score=half_term_score,
-        term=term,
-    )
-
-    # -------------------------------
-    # Grade mapping (END OF TERM ONLY)
-    # -------------------------------
-    if term.term_type == "END_OF_TERM":
-        grade, grade_point, comment = map_grade_and_point(
-            school=school,
-            score=total_score,
-        )
-    else:
-        grade = None
-        grade_point = None
-        comment = "Progress assessment"
-
-    # -------------------------------
-    # Persist result
-    # -------------------------------
-    subject_result, _ = SubjectResult.objects.update_or_create(
-        student=student,
-        classroom_subject=classroom_subject,
-        term=term,
-        defaults={
-            "total_ca": total_ca,
-            "exam_score": exam_score,
-            "half_term_score": half_term_score,
-            "total_score": total_score,
-            "average_score": average_score or 0,
-            "grade": grade,
-            "grade_point": grade_point,
-            "comment": comment,
-        },
-    )
-
-    return subject_result
-
+        logger.error(f"No active assessment policy found for school_id={school_id}, term_id={term_id}")
+        raise ValidationError("No active assessment policy configured.")
+    logger.info(f"Loaded policy: CA {policy.ca_weight}%, EXAM {policy.exam_weight}%")
+    return policy
 
 # ---------------------------------------------------------------------
-# Term Summary & Ranking
+# AGGREGATION ENGINE
 # ---------------------------------------------------------------------
 
-@transaction.atomic
-def compute_term_summary_for_class(
-    *,
-    class_group: ClassRoom,
-    term: AcademicTerm,
-) -> list[TermReportSummary]:
+def aggregate_scores(student_ids: List[int], subject_ids: List[int]) -> Dict[Tuple[int, int], Dict[str, Decimal]]:
     """
-    Compute TermReportSummary and assign positions.
+    Aggregate assessment scores for given student and subject IDs.
+    Returns a dictionary keyed by (student_id, subject_id) with values containing aggregated CA,
+    EXAM, and HALF_TERM scores.
+     The aggregation is done in a single query to optimize performance, and the results are processed
+     in Python to avoid issues with Avg on Decimal fields.
     """
 
-    students = Student.objects.filter(class_group=class_group)
-    summaries: list[TermReportSummary] = []
-
-    for student in students:
-        results = SubjectResult.objects.filter(
-            student=student,
-            term=term,
-            classroom_subject__class_rooms=class_group,
-        ).exclude(total_score__isnull=True)
-
-        total_score = results.aggregate(
-            total=Sum("total_score"),
-        )["total"] or 0.0
-
-        subject_count = results.count() or 1
-        average_score = total_score / subject_count
-
-        valid_results = results.exclude(grade_point__isnull=True)
-
-        total_points = valid_results.aggregate(
-            total=Sum("grade_point"),
-        )["total"] or 0
-
-        gpa = (
-            total_points / valid_results.count()
-            if valid_results.exists()
-            else 0
+    logger.info(f"Aggregating scores for {len(student_ids)} students and {len(subject_ids)} subjects")
+    rows = (
+        AssessmentRecord.objects.filter(
+            student_id__in=student_ids,
+            classroom_subject_id__in=subject_ids
         )
-
-        summary, _ = TermReportSummary.objects.update_or_create(
-            student=student,
-            term=term,
-            class_group=class_group,
-            defaults={
-                "total_score": total_score,
-                "average_score": average_score,
-                "total_points": total_points,
-                "gpa": round(gpa, 2),
-            },
-        )
-
-        summaries.append(summary)
-
-    _assign_class_positions(summaries)
-    return summaries
-
-
-def _assign_class_positions(
-    summaries: list[TermReportSummary],
-) -> None:
-    """
-    Rank by:
-        1. Total points
-        2. Total score
-    """
-
-    summaries.sort(
-        key=lambda s: (-s.total_points, -s.total_score),
+        .values("student_id", "classroom_subject_id", "period__period_type")
+        .annotate(avg_score=Avg("score"))
     )
 
-    last_rank = 0
-    last_values = None
+    data = defaultdict(lambda: {"CA": Decimal("0"), "EXAM": Decimal("0"), "HALF_TERM": Decimal("0")})
 
-    for index, summary in enumerate(summaries, start=1):
-        current = (summary.total_points, summary.total_score)
-
-        if current == last_values:
-            summary.class_position = last_rank
+    for r in rows:
+        key = (r["student_id"], r["classroom_subject_id"])
+        score = Decimal(r["avg_score"] or 0)
+        period = r["period__period_type"]
+        if period == "EXAM":
+            data[key]["EXAM"] = score
+        elif period == "HALF_TERM":
+            data[key]["HALF_TERM"] = score
         else:
-            summary.class_position = index
-            last_rank = index
-            last_values = current
+            data[key]["CA"] += score
 
-        summary.save(update_fields=["class_position"])
-
+    logger.info(f"Aggregated scores for {len(data)} student-subject combinations")
+    return data
 
 # ---------------------------------------------------------------------
-# Bulk Computation
+# SCORE ENGINE
+# ---------------------------------------------------------------------
+
+def compute_scores(policy: AssessmentPolicy, term: AcademicTerm, agg: Dict, student_id: int, subject_id: int) -> Tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
+    record = agg.get((student_id, subject_id), {})
+    ca = record.get("CA", Decimal("0"))
+    exam = record.get("EXAM", Decimal("0"))
+    half = record.get("HALF_TERM", Decimal("0"))
+
+    if term.term_type == "END_OF_TERM":
+        total = (ca * policy.ca_weight / 100) + (exam * policy.exam_weight / 100)
+    elif term.term_type == "HALF_TERM":
+        total = ca
+    else:
+        total = ca + exam
+    total = min(total, Decimal("100"))
+
+    avg = Decimal("0")
+    if term.term_type == "HALF_TERM":
+        parts = [ca] + ([half] if half else [])
+        avg = sum(parts) / Decimal(len(parts))
+
+    logger.debug(f"Computed scores for student_id={student_id}, subject_id={subject_id}: CA={ca}, EXAM={exam}, HALF={half}, TOTAL={total}, AVG={avg}")
+    return ca, exam, half, total, avg
+
+# ---------------------------------------------------------------------
+# SUBJECT RESULTS (BULK)
 # ---------------------------------------------------------------------
 
 @transaction.atomic
-def compute_all_results_for_term(
-    *,
-    class_group: ClassRoom,
-    term: AcademicTerm,
-):
+def compute_all_subject_results(class_group: ClassRoom, term: AcademicTerm) -> Dict[str, int]:
+    logger.info(f"Computing all subject results for class_group={class_group.id}, term={term.id}")
+    student_ids = list(Student.objects.filter(classroom=class_group).values_list("id", flat=True))
+    subject_ids = list(Subject.objects.filter(class_rooms=class_group).values_list("id", flat=True))
+
+    if not student_ids or not subject_ids:
+        logger.warning(f"No students or subjects found for class_group={class_group.id}")
+        return {"created": 0, "updated": 0}
+
+    school_id = class_group.school_id
+    policy = load_policy(school_id, term.id)
+    scales = load_grade_scales(school_id)
+    agg = aggregate_scores(student_ids, subject_ids)
+
+    existing_results = {
+        (r.student_id, r.classroom_subject_id): r
+        for r in SubjectResult.objects.filter(
+            student_id__in=student_ids,
+            classroom_subject_id__in=subject_ids,
+            term=term
+        ).only(
+            "id", "student_id", "classroom_subject_id",
+            "total_ca", "exam_score", "half_term_score",
+            "total_score", "average_score", "grade", "grade_point", "comment"
+        )
+    }
+
+    to_create, to_update = [], []
+
+    for student_id in student_ids:
+        for subject_id in subject_ids:
+            ca, exam, half, total, avg = compute_scores(policy, term, agg, student_id, subject_id)
+            if term.term_type == "END_OF_TERM":
+                grade, point, remark = map_grade(total, scales)
+            else:
+                grade, point, remark = None, None, "Progress assessment"
+
+            payload = {
+                "total_ca": ca, "exam_score": exam, "half_term_score": half,
+                "total_score": total, "average_score": avg,
+                "grade": grade, "grade_point": point, "comment": remark
+            }
+
+            key = (student_id, subject_id)
+            if key in existing_results:
+                obj = existing_results[key]
+                for field, value in payload.items():
+                    setattr(obj, field, value)
+                to_update.append(obj)
+            else:
+                to_create.append(
+                    SubjectResult(student_id=student_id, classroom_subject_id=subject_id, term=term, **payload)
+                )
+
+    if to_create:
+        SubjectResult.objects.bulk_create(to_create, batch_size=1000)
+        logger.info(f"Created {len(to_create)} SubjectResult records")
+    if to_update:
+        SubjectResult.objects.bulk_update(to_update, fields=list(payload.keys()), batch_size=1000)
+        logger.info(f"Updated {len(to_update)} SubjectResult records")
+
+    return {"created": len(to_create), "updated": len(to_update)}
+
+# ---------------------------------------------------------------------
+# TERM SUMMARY (BULK)
+# ---------------------------------------------------------------------
+
+@transaction.atomic
+def compute_term_summary(class_group: ClassRoom, term: AcademicTerm) -> List[TermReportSummary]:
     """
-    Compute all SubjectResults and TermReportSummary.
+    Compute term summaries and assign class positions for a class group.
+    Uses Python-level calculation to avoid DB-level Avg on aggregated fields.
     """
+    logger.info(f"Computing term summary for class_group={class_group.id}, term={term.id}")
 
-    subjects = Subject.objects.filter(class_rooms=class_group)
-
-    for subject in subjects:
-        students = Student.objects.filter(class_group=class_group)
-
-        for student in students:
-            compute_subject_result(
-                student=student,
-                classroom_subject=subject,
-                term=term,
-            )
-
-    return compute_term_summary_for_class(
-        class_group=class_group,
-        term=term,
+    # Aggregate total_score and total_points per student
+    rows = (
+        SubjectResult.objects.filter(
+            classroom_subject__class_rooms=class_group,
+            term=term
+        )
+        .values("student_id")
+        .annotate(
+            total_score=Sum("total_score"),
+            total_points=Sum("grade_point"),
+            subject_count=Sum(1)  # count of subjects for averaging
+        )
     )
+
+    # Convert aggregates to Decimal to avoid float / Decimal errors
+    def to_decimal(value):
+        if value is None:
+            return Decimal("0")
+        return Decimal(str(value))
+
+    aggregated = {}
+    for r in rows:
+        student_id = r["student_id"]
+        total_score = to_decimal(r.get("total_score"))
+        total_points = to_decimal(r.get("total_points"))
+        subject_count = r.get("subject_count") or 1  # prevent division by zero
+        avg_score = total_score / Decimal(subject_count)
+        aggregated[student_id] = {
+            "total_score": total_score,
+            "average_score": avg_score,
+            "total_points": total_points
+        }
+
+    # Fetch all students in the class
+    student_ids = list(Student.objects.filter(classroom=class_group).values_list("id", flat=True))
+
+    # Fetch existing summaries
+    existing_summaries = {
+        s.student_id: s
+        for s in TermReportSummary.objects.filter(
+            student_id__in=student_ids, class_group=class_group, term=term  # <-- fixed
+        ).only("id", "student_id", "total_score", "average_score", "total_points", "gpa", "class_position")
+    }
+
+    to_create, to_update, summaries = [], [], []
+
+    for student_id in student_ids:
+        data = aggregated.get(student_id, {})
+        total_score = data.get("total_score", Decimal("0"))
+        avg_score = data.get("average_score", Decimal("0"))
+        total_points = data.get("total_points", Decimal("0"))
+
+        payload = {
+            "total_score": total_score,
+            "average_score": avg_score,
+            "total_points": total_points,
+            "gpa": total_points.quantize(Decimal("0.01"))
+        }
+
+        if student_id in existing_summaries:
+            obj = existing_summaries[student_id]
+            for field, value in payload.items():
+                setattr(obj, field, value)
+            to_update.append(obj)
+            summaries.append(obj)
+        else:
+            obj = TermReportSummary(student_id=student_id, class_group=class_group, term=term, **payload)  # <-- fixed
+            to_create.append(obj)
+            summaries.append(obj)
+
+    if to_create:
+        TermReportSummary.objects.bulk_create(to_create, batch_size=1000)
+        logger.info(f"Created {len(to_create)} TermReportSummary records")
+    if to_update:
+        TermReportSummary.objects.bulk_update(to_update, fields=list(payload.keys()), batch_size=1000)
+        logger.info(f"Updated {len(to_update)} TermReportSummary records")
+
+    # Assign positions in class
+    _assign_positions(summaries)
+    logger.info(f"Assigned class positions for {len(summaries)} students in class_group={class_group.id}")
+
+    return summaries
+# ---------------------------------------------------------------------
+# CLASS POSITION ASSIGNMENT
+# ---------------------------------------------------------------------
+
+def _assign_positions(summaries: List[TermReportSummary]) -> None:
+    """
+    Assign class positions based on total_points and total_score.
+    Handles ties: students with same points/score get same rank.
+    """
+    total_students = len(summaries)
+    logger.info(f"Assigning class positions for {total_students} students")
+
+    # Sort by total_points descending, then total_score descending
+    summaries.sort(key=lambda s: (-s.total_points, -s.total_score))
+
+    last_rank, last_value = 0, None
+    for idx, s in enumerate(summaries, start=1):
+        current = (s.total_points, s.total_score)
+        if current == last_value:
+            s.class_position = last_rank  # Tie: same rank
+        else:
+            s.class_position = idx
+            last_rank, last_value = idx, current
+        logger.debug(f"Student {s.student_id} assigned position {s.class_position} "
+                     f"(points={s.total_points}, total_score={s.total_score})")
+
+    TermReportSummary.objects.bulk_update(summaries, ["class_position"], batch_size=1000)
+
+    logger.info(f"Class positions assigned successfully for {total_students} students")
+    if total_students:
+        logger.info(f"Top student: student_id={summaries[0].student_id}, position={summaries[0].class_position}")
+        logger.info(f"Last student: student_id={summaries[-1].student_id}, position={summaries[-1].class_position}")

@@ -12,6 +12,7 @@ from core.applications.academics.models import StudentClassAssignment
 from core.applications.academics.models import StudentSubjectEnrollment
 from core.applications.academics.models import Subject
 from core.applications.academics.models import TeachingAssignment
+from core.applications.academics.models import TermPeriod
 from core.applications.academics.models import TimeSlot
 from core.applications.academics.models import Timetable
 
@@ -58,6 +59,11 @@ class AcademicSessionAdmin(TenantAdminMixin, admin.ModelAdmin):
     search_fields = ("name", "school__name")
     ordering = ("-created_at",)
 
+@admin.register(TermPeriod)
+class TermPeriodAdmin(TenantAdminMixin, admin.ModelAdmin):
+    list_display = ("id", "name", "start_date", "end_date")
+    search_fields = ("name", "school__name")
+    ordering = ("-start_date",)
 
 @admin.register(AcademicTerm)
 class AcademicTermAdmin(admin.ModelAdmin):
@@ -119,7 +125,7 @@ class SubjectAdmin(admin.ModelAdmin):
 
 @admin.register(ClassRoom)
 class ClassRoomAdmin(admin.ModelAdmin):
-    list_display = ("id", "academic_class", "arm", "school")
+    list_display = ("id", "academic_class", "arm", "track", "school")
     list_filter = ("academic_class", "school")
     search_fields = ("academic_class", "arm")
 

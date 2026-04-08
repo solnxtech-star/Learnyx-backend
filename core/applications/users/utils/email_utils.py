@@ -8,29 +8,17 @@ logger = logging.getLogger(__name__)
 
 def send_approval_notification(profile, action, reason=None):
     """
-    Send approval/rejection notification to user.
+    Send profile review outcome notification to the user.
     """
     user = profile.user
-    profile_type = profile.__class__.__name__.replace('Profile', '').lower()
+    profile_type = profile.__class__.__name__.replace("Profile", "").lower()
 
-    if action == "approve":
-        subject = _("Your Account Has Been Approved")
-        message = _(
-            f"Hello {user.name or user.email},\n\n"
-            f"Your {profile_type} account has been approved. "
-            f"You can now login to the system.\n\n"
-            f"Login URL: {settings.FRONTEND_URL}/login\n\n"
-            f"Thank you for joining us!"
-        )
-    else:
-        subject = _("Your Account Application Status")
-        message = _(
-            f"Hello {user.name or user.email},\n\n"
-            f"Your {profile_type} account application has been reviewed and unfortunately "
-            f"we cannot approve it at this time."
-        )
-        if reason:
-            message += _("\n\nReason: {reason}").format(reason=reason)
+    subject, message = _build_notification_content(
+        user=user,
+        profile_type=profile_type,
+        action=action,
+        reason=reason,
+    )
 
     try:
         send_mail(
@@ -41,6 +29,51 @@ def send_approval_notification(profile, action, reason=None):
             fail_silently=False,
         )
         return True
-    except Exception as e:
-        logger.error(f"Failed to send email to {user.email}: {str(e)}")
+    except Exception:
+        logger.exception(
+            "Failed to send %s notification email to %s",
+            action,
+            user.email,
+        )
         return False
+
+def _build_notification_content(*, user, profile_type, action, reason=None):
+    """
+    Build subject and message content based on review action.
+    """
+    identifier = user.name or user.email
+
+    if action == "approve":
+        subject = _("Your Account Has Been Approved")
+        message = _(
+            f"Hello {identifier},\n\n"
+            f"Your {profile_type} account has been approved. "
+            f"You may now access the system.\n\n"
+            f"Login URL: {settings.FRONTEND_URL}/login\n\n"
+            f"Thank you."
+        )
+
+    elif action == "reject":
+        subject = _("Your Account Application Status")
+        message = _(
+            f"Hello {identifier},\n\n"
+            f"Your {profile_type} account application has been reviewed and cannot be approved."
+        )
+        if reason:
+            message += _("\n\nReason:\n{reason}").format(reason=reason)
+
+    elif action == "request_changes":
+        subject = _("Action Required: Profile Update Needed")
+        message = _(
+            f"Hello {identifier},\n\n"
+            f"Your {profile_type} profile has been reviewed. "
+            f"Some required information is missing or needs correction.\n\n"
+            f"Please update your profile and resubmit for review."
+        )
+        if reason:
+            message += _("\n\nDetails:\n{reason}").format(reason=reason)
+
+    else:
+        raise ValueError("Unsupported notification action.")
+
+    return subject, message

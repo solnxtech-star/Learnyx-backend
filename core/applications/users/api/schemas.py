@@ -9,6 +9,7 @@ from rest_framework import serializers
 from core.applications.users.api.serializers import serializers as user_serializers
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicSessionSerializer,
+    AdminAssignClassroomsAndSubjectsSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicTermSerializer,
@@ -1165,29 +1166,58 @@ TeacherViewSetSchema = extend_schema_view(
     # ============================================================
     # ASSIGN CLASSROOMS AND SUBJECTS
     # ============================================================
-    assign_classrooms_subjects=extend_schema(
-        tags=["Admin Management"],
-        summary="Assign Classrooms and Subjects to a Teacher",
-        description=(
-            "Admin-only endpoint to assign classrooms and subjects to a specific teacher.\n\n"
-            "**Behavior:**\n"
-            " - Replaces the teacher's current classrooms and subjects with the provided lists\n"
-            " - Updates `TeachingAssignment` objects automatically\n"
-            " - Fully transactional: changes are applied atomically\n"
-            " - Handles duplicates and ensures database constraints (`unique_together`) are not violated\n\n"
-            "**Request Body:**\n"
-            " - `classroom_ids`: List of classroom UUIDs\n"
-            " - `subject_ids`: List of subject UUIDs\n\n"
-            "**Notes:**\n"
-            " - Only classrooms and subjects belonging to the authenticated user's school are allowed\n"
-            " - Duplicate entries in `subject_ids` or `classroom_ids` are rejected\n"
-        ),
-        responses={
-            200: TeacherDetailSerializer,
-            400: "Validation errors for invalid classrooms, subjects, or duplicates",
-            403: "Forbidden if the user is not an admin/principal"
-        }
+    assign_classrooms_subjects = extend_schema(
+    tags=["Admin Management"],
+    summary="Assign Subjects per Classroom to a Teacher",
+    description=(
+        "Admin-only endpoint to assign subjects to a teacher on a per-classroom basis.\n\n"
+
+        "**Behavior:**\n"
+        " - Replaces ALL existing classroom and subject assignments for the teacher\n"
+        " - Assigns subjects per classroom (no cross-class subject leakage)\n"
+        " - Updates `TeachingAssignment` records accordingly\n"
+        " - Fully transactional: all changes succeed or fail together\n"
+        " - Prevents duplicate classrooms and duplicate subjects per classroom\n"
+        " - Enforces database-level uniqueness constraints\n\n"
+
+        "**Request Body:**\n"
+        "```\n"
+        "{\n"
+        '  "assignments": [\n'
+        "    {\n"
+        '      "classroom_id": "uuid",\n'
+        '      "subject_ids": ["uuid", "uuid"]\n'
+        "    },\n"
+        "    {\n"
+        '      "classroom_id": "uuid",\n'
+        '      "subject_ids": ["uuid"]\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "```\n\n"
+
+        "**Field Details:**\n"
+        " - `assignments`: List of classroom-specific subject assignments\n"
+        " - `classroom_id`: UUID of the classroom\n"
+        " - `subject_ids`: List of subject UUIDs assigned to the teacher in that classroom\n\n"
+
+        "**Validation Rules:**\n"
+        " - All classrooms and subjects must belong to the authenticated user's school\n"
+        " - Each classroom can only appear once in the request\n"
+        " - Each classroom must have at least one subject\n"
+        " - Duplicate subjects within a classroom are not allowed\n\n"
+
+        "**Notes:**\n"
+        " - This endpoint performs a full replacement of assignments (not partial update)\n"
+        " - Existing assignments not included in the request will be removed\n"
     ),
+    request=AdminAssignClassroomsAndSubjectsSerializer,
+    responses={
+        200: TeacherDetailSerializer,
+        400: "Validation error (invalid classrooms, subjects, or duplicates)",
+        403: "Forbidden (only admins/principals allowed)",
+    },
+)
 )
 
 GRADING_SCHEMA = extend_schema_view(

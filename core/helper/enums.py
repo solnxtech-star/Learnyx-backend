@@ -18,6 +18,8 @@ class AdmissionStatus(models.TextChoices):
     PENDING = "pending", _("Pending Approval")
     APPROVED = "approved", _("Approved")
     REJECTED = "rejected", _("Rejected")
+    ACTION_REQUIRED = "action_required", _("Action Required")
+    REQUIRES_UPDATE = "requires_update", _("Requires Update")
 
 
 class AcademicClass(models.TextChoices):

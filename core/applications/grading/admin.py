@@ -3,7 +3,10 @@ from django.contrib import admin
 from core.applications.grading.models import GradeScale
 from core.applications.grading.models import SubjectResult
 from core.applications.grading.models import TargetGrade
+from core.applications.grading.models import TermReportSummary
+
 # from core.applications.grading.models import TeacherComment
+
 
 # Register your models here.
 
@@ -43,3 +46,15 @@ class GradeScaleAdmin(admin.ModelAdmin):
     )
     search_fields = ("term__name", "class_room__name", "version")
     list_filter = ("term", "class_room")
+
+
+@admin.register(TermReportSummary)
+class TermReportSummaryAdmin(admin.ModelAdmin):
+    list_display = (
+        "id", "student",
+        "term","gpa",
+        "class_position", "class_group",
+        "average_score",
+    )
+    search_fields = ("student__user__name", "term__name")
+    list_filter = ("term",)

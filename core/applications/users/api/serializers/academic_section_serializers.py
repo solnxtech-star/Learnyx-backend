@@ -1,8 +1,10 @@
 import re
+from datetime import datetime
 from datetime import timedelta
 
 from django.db import IntegrityError
 from django.db import transaction
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
@@ -193,7 +195,6 @@ class CloseAcademicSessionSerializer(serializers.Serializer):
 # Academic Term Serializer
 # ============================================================================
 
-
 class TermPeriodSerializer(serializers.ModelSerializer):
     """
     Serializer for individual periods within an academic term.
@@ -201,7 +202,9 @@ class TermPeriodSerializer(serializers.ModelSerializer):
     Responsibilities:
     - Supports Half-Term, Exam, Holiday, or custom periods.
     - Validates start and end dates.
-    - Ensures periods fall within the parent term and tenant scope.
+    - Ensures periods fall within the parent term.
+    - Prevents overlapping periods within the same term.
+    - Enforces tenant (school) scope.
     """
 
     class Meta:
@@ -238,10 +241,18 @@ class TermPeriodSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(_("Cross-school access denied."))
 
         if start_date > end_date:
-            raise serializers.ValidationError(_("start_date cannot be after end_date."))
+            raise serializers.ValidationError(_("Period start_date cannot be after end_date."))
 
         if start_date < term.start_date or end_date > term.end_date:
-            raise serializers.ValidationError(_("Period must fall within the term start and end dates."))
+            raise serializers.ValidationError(_("Period must fall within the term's start and end dates."))
+
+        # Check for overlap with existing periods in this term
+        existing_periods = term.periods.exclude(pk=getattr(self.instance, "pk", None))
+        for ep in existing_periods:
+            if not (end_date < ep.start_date or start_date > ep.end_date):
+                raise serializers.ValidationError(
+                    _("Period dates cannot overlap with existing period '%s'.") % ep.name
+                )
 
         return data
 
@@ -260,6 +271,7 @@ class AcademicTermSerializer(serializers.ModelSerializer):
     - Prevents activation under inactive sessions.
     - Supports nested TermPeriods (optional user-provided periods).
     - Auto-generates First Half / Second Half periods if none are provided.
+    - Ensures term dates fall within session and periods fall within term.
     """
 
     session_name = serializers.CharField(source="session.name", read_only=True)
@@ -310,6 +322,9 @@ class AcademicTermSerializer(serializers.ModelSerializer):
         session = attrs.get("session") or getattr(self.instance, "session", None)
         term_number = attrs.get("term_number") or getattr(self.instance, "term_number", None)
         name = attrs.get("name") or getattr(self.instance, "name", None)
+        start_date = attrs.get("start_date") or getattr(self.instance, "start_date", None)
+        end_date = attrs.get("end_date") or getattr(self.instance, "end_date", None)
+        periods = attrs.get("periods", [])
 
         if session and session.school != school:
             raise serializers.ValidationError(_("Cross-school access denied."))
@@ -319,6 +334,7 @@ class AcademicTermSerializer(serializers.ModelSerializer):
                 _("Allowed terms are: %s") % ", ".join(self.STANDARD_TERMS)
             )
 
+        # Ensure term_number is unique within the session
         if session and term_number:
             qs = self._tenant_qs().filter(session=session, term_number=term_number)
             if self.instance:
@@ -327,6 +343,38 @@ class AcademicTermSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     _("Term number '%s' already exists in this session.") % term_number
                 )
+
+        # Term date validation
+        if start_date and end_date:
+            if end_date <= start_date:
+                raise serializers.ValidationError(_("Term end_date must be after start_date."))
+
+            if session.start_date and start_date < session.start_date:
+                raise serializers.ValidationError(_("Term cannot start before session start_date."))
+
+            if session.end_date and end_date > session.end_date:
+                raise serializers.ValidationError(_("Term cannot end after session end_date."))
+
+        # Validate nested periods
+        sorted_periods = sorted(periods, key=lambda x: x.get("start_date") or timezone.now().date())
+        for i, p in enumerate(sorted_periods):
+            p_start = p.get("start_date")
+            p_end = p.get("end_date")
+
+            if p_start and p_end:
+                if p_end <= p_start:
+                    raise serializers.ValidationError(_("Each period's end_date must be after start_date."))
+
+                if start_date and (p_start < start_date or p_end > end_date):
+                    raise serializers.ValidationError(
+                        _("All periods must fall within the term dates.")
+                    )
+
+            # Check overlap with previous period
+            if i > 0:
+                prev = sorted_periods[i - 1]
+                if p_start <= prev.get("end_date"):
+                    raise serializers.ValidationError(_("Periods cannot overlap within a term."))
 
         return attrs
 
@@ -350,7 +398,7 @@ class AcademicTermSerializer(serializers.ModelSerializer):
         if not validated_data.get("term_type") and term_number:
             validated_data["term_type"] = self._determine_term_type(term_number)
 
-        # Deactivate other active terms
+        # Deactivate other active terms in session
         if validated_data.get("is_active") and validated_data.get("session"):
             self._tenant_qs().filter(session=validated_data["session"]).update(is_active=False)
 
@@ -361,6 +409,7 @@ class AcademicTermSerializer(serializers.ModelSerializer):
             periods = [TermPeriod(school=school, term=term, **p) for p in periods_data]
             TermPeriod.objects.bulk_create(periods)
         else:
+            # Auto-split term into two halves if no periods provided
             start_date = term.start_date
             end_date = term.end_date
             if start_date and end_date:
@@ -402,6 +451,7 @@ class AcademicTermSerializer(serializers.ModelSerializer):
 
         term = super().update(instance, validated_data)
 
+        # Update periods if provided
         if periods_data is not None:
             term.periods.all().delete()
             periods = [TermPeriod(school=school, term=term, **p) for p in periods_data]
@@ -420,6 +470,7 @@ class BulkAcademicTermSerializer(serializers.Serializer):
     Responsibilities:
     - Validates tenant scope and active session.
     - Prevents duplicate term_numbers in payload and DB.
+    - Ensures term dates fall within the session.
     """
 
     session = serializers.PrimaryKeyRelatedField(queryset=AcademicSession.objects.all())
@@ -442,15 +493,51 @@ class BulkAcademicTermSerializer(serializers.Serializer):
         if not session.is_active:
             raise serializers.ValidationError(_("Cannot create terms under an inactive session."))
 
+        # Check for duplicate term_numbers in payload
         term_numbers = [t.get("term_number") for t in data["terms"]]
         if len(term_numbers) != len(set(term_numbers)):
             raise serializers.ValidationError(_("Duplicate term_number detected in payload."))
 
+        # Check against existing DB terms
         existing_numbers = set(
-            AcademicTerm.objects.for_school(school).filter(session=session).values_list("term_number", flat=True)
+            AcademicTerm.objects.for_school(school)
+            .filter(session=session)
+            .values_list("term_number", flat=True)
         )
         if any(num in existing_numbers for num in term_numbers):
             raise serializers.ValidationError(_("One or more term_numbers already exist in this session."))
+
+        # Ensure term dates fall within session
+        for t in data["terms"]:
+            start_str = t.get("start_date")
+            end_str = t.get("end_date")
+
+            if start_str and end_str:
+                # Convert from string to date if needed
+                if isinstance(start_str, str):
+                    try:
+                        start = datetime.strptime(start_str, "%Y-%m-%d").date()
+                    except ValueError:
+                        raise serializers.ValidationError(_("Invalid start_date format. Use YYYY-MM-DD."))
+                else:
+                    start = start_str
+
+                if isinstance(end_str, str):
+                    try:
+                        end = datetime.strptime(end_str, "%Y-%m-%d").date()
+                    except ValueError:
+                        raise serializers.ValidationError(_("Invalid end_date format. Use YYYY-MM-DD."))
+                else:
+                    end = end_str
+
+                if end <= start:
+                    raise serializers.ValidationError(_("Term end_date must be after start_date."))
+
+                if session.start_date and start < session.start_date:
+                    raise serializers.ValidationError(_("Term cannot start before session start_date."))
+
+                if session.end_date and end > session.end_date:
+                    raise serializers.ValidationError(_("Term cannot end after session end_date."))
 
         return data
 # ============================================================================
@@ -777,111 +864,130 @@ class TeacherDetailSerializer(serializers.ModelSerializer):
             for a in assignments
         ]
 
-class AdminAssignClassroomsAndSubjectsSerializer(serializers.Serializer):
-    """
-    Admin-only serializer to assign classrooms and subjects to a teacher.
-
-    Behavior:
-        - Replaces teacher's classrooms and subjects with the provided lists.
-        - Updates TeachingAssignments accordingly.
-        - Ensures no duplicates or database constraint violations.
-        - Fully transactional.
-    """
-
-    classroom_ids = serializers.ListField(
-        child=serializers.CharField(),
-        allow_empty=False,
-        help_text="List of classroom UUIDs to assign to the teacher."
-    )
+class ClassroomSubjectAssignmentSerializer(serializers.Serializer):
+    """Serializer for assigning subjects to a teacher for a specific classroom."""
+    classroom_id = serializers.CharField()
     subject_ids = serializers.ListField(
         child=serializers.CharField(),
         allow_empty=False,
-        help_text="List of subject UUIDs to assign to the teacher."
     )
 
-    def validate_classroom_ids(self, ids):
-        school = self.context["request"].user.school
+class AdminAssignClassroomsAndSubjectsSerializer(serializers.Serializer):
+    """
+    Admin-only serializer to assign subjects per classroom to a teacher.
 
+    Behavior:
+        - Accepts structured assignments per classroom.
+        - Replaces ALL existing teacher assignments.
+        - Prevents cross-class subject leakage.
+        - Ensures strict school-level validation.
+        - Prevents duplicates at all levels.
+        - Fully transactional.
+    """
+
+    assignments = ClassroomSubjectAssignmentSerializer(many=True)
+
+    def validate(self, data):
+        school = self.context["request"].user.school
+        assignments = data["assignments"]
+
+        if not assignments:
+            msg = "At least one assignment is required."
+            raise serializers.ValidationError(msg)
+
+        seen_classrooms = set()
+        all_subject_ids = set()
+
+        for item in assignments:
+            classroom_id = item["classroom_id"]
+            subject_ids = item["subject_ids"]
+
+            # Prevent duplicate classrooms
+            if classroom_id in seen_classrooms:
+                msg = f"Duplicate classroom assignment detected: {classroom_id}"
+                raise serializers.ValidationError(
+                    msg,
+                )
+            seen_classrooms.add(classroom_id)
+
+            # Prevent empty subject list (extra safety)
+            if not subject_ids:
+                msg = f"Classroom {classroom_id} must have at least one subject."
+                raise serializers.ValidationError(
+                    msg,
+                )
+
+            # Prevent duplicate subjects per classroom
+            if len(subject_ids) != len(set(subject_ids)):
+                msg = f"Duplicate subjects in classroom {classroom_id}."
+                raise serializers.ValidationError(
+                    msg
+                )
+
+            all_subject_ids.update(subject_ids)
+
+        # Validate classrooms belong to school
         valid_classrooms = set(
-            ClassRoom.objects.filter(id__in=ids, school=school)
+            ClassRoom.objects.filter(id__in=seen_classrooms, school=school)
             .values_list("id", flat=True)
         )
 
-        if set(ids) != valid_classrooms:
+        if seen_classrooms != valid_classrooms:
+            msg = "Some classrooms do not exist or do not belong to your school."
             raise serializers.ValidationError(
-                "Some classrooms do not exist or do not belong to your school."
+                msg,
             )
 
-        return list(valid_classrooms)
-
-    def validate_subject_ids(self, ids):
-        school = self.context["request"].user.school
-
+        #  Validate subjects belong to school
         valid_subjects = set(
-            Subject.objects.filter(id__in=ids, school=school)
+            Subject.objects.filter(id__in=all_subject_ids, school=school)
             .values_list("id", flat=True)
         )
 
-        if set(ids) != valid_subjects:
+        if all_subject_ids != valid_subjects:
+            msg = "Some subjects do not exist or do not belong to your school."
             raise serializers.ValidationError(
-                "Some subjects do not exist or do not belong to your school."
+                msg,
             )
 
-        # Remove duplicates in input
-        if len(ids) != len(set(ids)):
-            raise serializers.ValidationError("Duplicate subjects in input.")
-
-        return list(valid_subjects)
+        return data
 
     @transaction.atomic
     def save(self):
-        """
-        Assign classrooms and subjects to the teacher and update TeachingAssignments.
-
-        Steps:
-            1. Update teacher's classrooms and subjects M2M fields.
-            2. Delete any TeachingAssignments outside the new classrooms or subjects.
-            3. Create missing TeachingAssignments for every classroom + subject combination.
-        """
         teacher = self.context["teacher"]
-        classroom_ids = self.validated_data["classroom_ids"]
-        subject_ids = self.validated_data["subject_ids"]
+        assignments_data = self.validated_data["assignments"]
 
-        # Update teacher classrooms and subjects
-        teacher.classrooms.set(classroom_ids)
-        teacher.subjects.set(subject_ids)
-        teacher.save()
-
-        # Remove TeachingAssignments outside the new set
-        TeachingAssignment.objects.filter(teacher=teacher).exclude(
-            classroom_id__in=classroom_ids,
-            subject_id__in=subject_ids
-        ).delete()
-
-        # Determine all desired combinations
-        desired_combinations = {
-            (str(classroom_id), str(subject_id))
-            for classroom_id in classroom_ids
-            for subject_id in subject_ids
+        # ✅ Flatten sets for M2M
+        classroom_ids = {item["classroom_id"] for item in assignments_data}
+        subject_ids = {
+            subject_id
+            for item in assignments_data
+            for subject_id in item["subject_ids"]
         }
 
-        # Determine existing combinations
-        existing_combinations = set(
-            TeachingAssignment.objects.filter(teacher=teacher)
-            .values_list("classroom_id", "subject_id")
-        )
+        # ✅ Update M2M (no need for teacher.save())
+        teacher.classrooms.set(classroom_ids)
+        teacher.subjects.set(subject_ids)
 
-        # Create only missing assignments
-        to_create = desired_combinations - existing_combinations
-        assignments = [
+        # ✅ Clean reset (safe + predictable)
+        TeachingAssignment.objects.filter(teacher=teacher).delete()
+
+        # ✅ Build exact assignments (no cross combinations)
+        new_assignments = [
             TeachingAssignment(
                 teacher=teacher,
-                classroom_id=classroom_id,
-                subject_id=subject_id
+                classroom_id=item["classroom_id"],
+                subject_id=subject_id,
             )
-            for classroom_id, subject_id in to_create
+            for item in assignments_data
+            for subject_id in item["subject_ids"]
         ]
-        TeachingAssignment.objects.bulk_create(assignments)
+
+        # ✅ Safe bulk insert
+        TeachingAssignment.objects.bulk_create(
+            new_assignments,
+            ignore_conflicts=True,
+        )
 
         return teacher
 
