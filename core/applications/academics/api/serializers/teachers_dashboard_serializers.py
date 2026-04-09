@@ -79,6 +79,91 @@ class TeacherClassroomSerializer(serializers.ModelSerializer):
 
         return TeacherSubjectSerializer(subjects, many=True).data
 
+
+class TeacherSubjectClassTermSerializer(serializers.ModelSerializer):
+    """
+    Serializer to return subjects taught by a teacher along with:
+    - Classroom
+    - Academic Session
+    - Academic Term
+
+    All IDs are strings (UUIDs or CharField) to prevent int conversion errors
+    and ensure compatibility with drf-spectacular/OpenAPI.
+    """
+
+    # TeachingAssignment ID
+    id = serializers.CharField(read_only=True)
+
+    # Subject Info
+    subject_id = serializers.CharField(source="subject.id", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    subject_code = serializers.CharField(source="subject.code", read_only=True)
+
+    # Classroom Info
+    classroom_id = serializers.CharField(source="classroom.id", read_only=True)
+    classroom_name = serializers.SerializerMethodField()
+    academic_class = serializers.CharField(source="classroom.academic_class", read_only=True)
+    arm = serializers.CharField(source="classroom.arm", read_only=True)
+
+    # Term & Session (from context)
+    term = serializers.SerializerMethodField()
+    session = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TeachingAssignment
+        fields = [
+            "id",  # TeachingAssignment ID as string
+            # Subject
+            "subject_id",
+            "subject_name",
+            "subject_code",
+            # Classroom
+            "classroom_id",
+            "classroom_name",
+            "academic_class",
+            "arm",
+            # Academic Period
+            "term",
+            "session",
+        ]
+        read_only_fields = fields
+
+    def get_classroom_name(self, obj):
+        """
+        Returns formatted classroom name.
+        Example: 'JSS1 A'
+        """
+        return f"{obj.classroom.academic_class} {obj.classroom.arm}"
+
+    def get_term(self, obj):
+        """
+        Injected via serializer context.
+        Ensures IDs are strings to avoid int conversion errors.
+        """
+        term = self.context.get("term")
+        if not term:
+            return None
+        return {
+            "id": str(term.id),
+            "name": term.name,
+            "term_number": term.term_number,
+            "term_type": term.term_type,
+        }
+
+    def get_session(self, obj):
+        """
+        Injected via serializer context.
+        Ensures IDs are strings.
+        """
+        session = self.context.get("session")
+        if not session:
+            return None
+        return {
+            "id": str(session.id),
+            "name": session.name,
+            "is_active": session.is_active,
+        }
+
 class ClassroomStudentSerializer(serializers.ModelSerializer):
     """
     Enhanced serializer for students visible to a teacher.
@@ -499,14 +584,7 @@ class BulkAssessmentEntryItemSerializer(serializers.Serializer):
 
     score = serializers.FloatField(min_value=0)
 
-class BulkAssessmentEntrySerializer(
-    serializers.Serializer,
-    AssessmentValidationMixin,
-):
-    """
-    Bulk creation of assessment records for multiple students.
-    """
-
+class BulkAssessmentEntrySerializer(serializers.Serializer, AssessmentValidationMixin):
     subject_id = serializers.PrimaryKeyRelatedField(
         queryset=Subject.objects.filter(is_active=True),
         source="subject",
@@ -515,59 +593,62 @@ class BulkAssessmentEntrySerializer(
     entries = BulkAssessmentEntryItemSerializer(many=True)
 
     def validate(self, attrs):
-        subject = attrs["subject"]
-        entries = attrs["entries"]
-
-        if not entries:
+        if not attrs["entries"]:
             raise serializers.ValidationError({
                 "entries": "Entries list cannot be empty."
             })
-
-        for entry in entries:
-            student = entry["student"]
-            assessment_type = entry["assessment_type"]
-            score = entry["score"]
-
-            self.validate_student_subject_term(
-                student, subject, assessment_type
-            )
-
-            self.validate_assessment_score(
-                student,
-                subject,
-                assessment_type,
-                score,
-            )
-
         return attrs
 
     def create(self, validated_data):
         subject = validated_data["subject"]
         entries = validated_data["entries"]
 
-        created_records = []
+        records = []
+        errors = []
 
-        with transaction.atomic():
-            for entry in entries:
+        for idx, entry in enumerate(entries):
+            try:
                 student = entry["student"]
                 assessment_type = entry["assessment_type"]
                 score = entry["score"]
 
-                record = AssessmentRecord.objects.create(
-                    student=student,
-                    classroom_subject=subject,
-                    assessment_type=assessment_type,
-                    score=score,
-                    index=self.get_next_index(
-                        student,
-                        subject,
-                        assessment_type,
-                    ),
+                self.validate_student_subject_term(
+                    student, subject, assessment_type
                 )
 
-                created_records.append(record)
+                self.validate_assessment_score(
+                    student,
+                    subject,
+                    assessment_type,
+                    score,
+                )
 
-        return created_records
+                records.append(
+                    AssessmentRecord(
+                        student=student,
+                        classroom_subject=subject,
+                        assessment_type=assessment_type,
+                        score=score,
+                        index=self.get_next_index(
+                            student,
+                            subject,
+                            assessment_type,
+                        ),
+                    )
+                )
+
+            except Exception as e:
+                errors.append({
+                    "index": idx,
+                    "error": str(e)
+                })
+
+        created = AssessmentRecord.objects.bulk_create(records, batch_size=1000)
+
+        return {
+            "created": created,
+            "errors": errors,
+        }
 
 class AssessmentEntrySerializer(serializers.ModelSerializer):
     """

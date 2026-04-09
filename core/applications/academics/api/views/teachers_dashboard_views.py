@@ -50,9 +50,10 @@ from core.applications.academics.api.serializers.teachers_dashboard_serializers 
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     TeachersSubjectSerializer,
 )
-from core.applications.academics.models import AcademicSession
-from core.applications.academics.models import AcademicTerm
-from core.applications.academics.models import AssessmentRecord
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    TeacherSubjectClassTermSerializer,
+)
+from core.applications.academics.models import AcademicSession, AcademicTerm, AssessmentRecord
 from core.applications.academics.models import AssessmentType
 from core.applications.academics.models import ClassRoom
 from core.applications.academics.models import StudentClassAssignment
@@ -74,9 +75,9 @@ from core.applications.users.api.serializers.admin_accessment_serializers import
 from core.applications.users.models import StudentContact
 from core.applications.users.models import StudentProfile
 from core.applications.users.models import TeacherProfile
-from core.helper.mixins import CurrentAcademicContextMixin
 from core.helper.permissions import IsSchoolAdminOrAssignedTeacher
-from core.helper.service import compute_all_subject_results, compute_term_summary
+from core.helper.service import compute_all_subject_results
+from core.helper.service import compute_term_summary
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,74 @@ class TeacherDashboardViewSet(
         )
 
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="teachers-subjects")
+    def subjects(self, request):
+        """
+        List subjects taught by the logged-in teacher,
+        including classroom, current academic session, and term.
+        """
+
+        try:
+            teacher = self._get_teacher(request.user)
+
+            academic_context = self._get_academic_context(teacher.school)
+            current_session = academic_context["session"]
+            current_term = academic_context["term"]
+
+            assignments = (
+                TeachingAssignment.objects
+                .filter(
+                    teacher=teacher,
+                    classroom__school=teacher.school,
+                )
+                .select_related(
+                    "subject",
+                    "classroom",
+                )
+                .order_by(
+                    "classroom__academic_class",
+                    "classroom__arm",
+                    "subject__name",
+                )
+            )
+
+            serializer = TeacherSubjectClassTermSerializer(
+                assignments,
+                many=True,
+                context={
+                    "request": request,
+                    "session": current_session,
+                    "term": current_term,
+                },
+            )
+
+            return Response(
+                {
+                    # Use serializer-safe dicts instead of str()
+                    "session": {
+                        "id": str(current_session.id),
+                        "name": current_session.name,
+                        "is_active": current_session.is_active,
+                    },
+                    "term": {
+                        "id": str(current_term.id),
+                        "name": current_term.name,
+                        "term_number": current_term.term_number,
+                        "term_type": current_term.term_type,
+                    },
+                    "total_subjects": assignments.count(),
+                    "results": serializer.data,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as e:
+            logger.exception(f"Error fetching teacher subjects: {str(e)}")
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(
         detail=False,
@@ -317,8 +386,26 @@ class TeacherDashboardViewSet(
             raise PermissionDenied("Classroom not found or access denied.")
 
     def _get_academic_context(self, school):
-        """Get current academic session and term for the school (teacher-only endpoint)"""
-        return self.get_current_academic_context(school=school)
+        """
+        Return the current academic session and term for a given school.
+        Assumes your AcademicSession and AcademicTerm models have methods to get the current ones.
+        """
+        # Example: get current active session
+        current_session = AcademicSession.objects.filter(school=school, is_active=True).first()
+
+        if not current_session:
+            raise ValidationError("No active academic session found for this school.")
+
+        # Example: get current active term in that session
+        current_term = AcademicTerm.objects.filter(session=current_session, is_active=True).first()
+
+        if not current_term:
+            raise ValidationError("No active academic term found for this session.")
+
+        return {
+            "session": current_session,
+            "term": current_term,
+        }
 
     def log_permission_denial(self, user, classroom_id):
         """Log permission denials for security audit"""
@@ -436,89 +523,52 @@ class TeacherDashboardViewSet(
     @action(detail=False, methods=["post"], url_path="assessments/enter-bulk")
     def enter_bulk_assessments(self, request):
         teacher = self._get_teacher(request.user)
-        serializer = BulkAssessmentEntrySerializer(data=request.data, context={"request": request})
+
+        serializer = BulkAssessmentEntrySerializer(
+            data=request.data,
+            context={"request": request}
+        )
         serializer.is_valid(raise_exception=True)
 
         subject = serializer.validated_data["subject"]
-        entries = serializer.validated_data["entries"]
-        created_records = []
 
-        # Preload teacher assignments (performance optimization)
-        teacher_classrooms = set(
-            TeachingAssignment.objects.filter(teacher=teacher, subject=subject).values_list("classroom_id", flat=True)
-        )
+        result = serializer.save()
 
-        # Map classroom_id -> set of terms that need computation
+        created_records = result["created"]
+        errors = result["errors"]
+
         classrooms_terms_map = {}
 
-        with transaction.atomic():
-            for entry in entries:
-                student = entry["student"]
-                assessment_type = entry["assessment_type"]
-                score = entry["score"]
-                student_name = student.user.name or "Student"
-                classroom = get_student_active_classroom(student)
-
-                # Authorization
-                if classroom.id not in teacher_classrooms:
-                    raise PermissionDenied(
-                        f"You are not assigned to teach {subject.name} in {student_name}'s classroom."
-                    )
-
-                # Term resolution & enrollment check
-                term = get_term_from_assessment(assessment_type)
-                if not StudentSubjectEnrollment.objects.filter(student=student, subject=subject, term=term).exists():
-                    raise ValidationError(f"{student_name} is not enrolled in {subject.name} for this term.")
-
-                # Persist record
-                record = AssessmentRecord.objects.create(
-                    student=student,
-                    classroom_subject=subject,
-                    assessment_type=assessment_type,
-                    score=score,
-                    index=serializer.get_next_index(student, subject, assessment_type),
-                )
-                created_records.append(record)
-
-                # Track affected classroom-term
-                classrooms_terms_map.setdefault(classroom, set()).add(term)
-
-                logger.info(
-                    "Bulk assessment record created",
-                    extra={
-                        "record_id": record.id,
-                        "student_id": student.id,
-                        "subject_id": subject.id,
-                        "assessment_type_id": assessment_type.id,
-                        "teacher_id": teacher.id,
-                    },
-                )
-
-            # -------------------------------
-            # Compute results once per classroom-term
-            # -------------------------------
-            for classroom, terms in classrooms_terms_map.items():
-                for term in terms:
-                    try:
-                        result_summary = compute_all_subject_results(classroom, term)
-                        term_summaries = compute_term_summary(classroom, term)
-                        logger.info(
-                            f"Computed subject results and term summary for classroom={classroom.id}, term={term.id}",
-                            extra={
-                                "result_summary": result_summary,
-                                "summaries_count": len(term_summaries),
-                            },
-                        )
-                    except Exception as e:
-                        logger.exception(
-                            f"Failed to compute results/term summary for classroom={classroom.id}, term={term.id}: {e}"
-                        )
-
-        logger.info(
-            f"Bulk assessment entry completed: total_records={len(created_records)}, total_classrooms_terms={len(classrooms_terms_map)}"
+        # Preload teacher classrooms
+        teacher_classrooms = set(
+            TeachingAssignment.objects.filter(
+                teacher=teacher,
+                subject=subject
+            ).values_list("classroom_id", flat=True)
         )
 
-        return Response(AssessmentEntrySerializer(created_records, many=True).data, status=status.HTTP_201_CREATED)
+        # Track affected classrooms/terms
+        for record in created_records:
+            classroom = get_student_active_classroom(record.student)
+            term = get_term_from_assessment(record.assessment_type)
+
+            if classroom.id not in teacher_classrooms:
+                continue  # already validated earlier ideally
+
+            classrooms_terms_map.setdefault(classroom, set()).add(term)
+
+        # Compute results once
+        for classroom, terms in classrooms_terms_map.items():
+            for term in terms:
+                compute_all_subject_results(classroom, term)
+                compute_term_summary(classroom, term)
+
+        return Response({
+            "created_count": len(created_records),
+            "error_count": len(errors),
+            "errors": errors,
+            "data": AssessmentEntrySerializer(created_records, many=True).data
+        }, status=status.HTTP_201_CREATED)
     # ------------------------------------------------------------------
     # ASSESSMENT VIEWING (READ)
     # ------------------------------------------------------------------

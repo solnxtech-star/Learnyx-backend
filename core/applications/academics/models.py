@@ -123,6 +123,7 @@ class TermPeriod(TenantAwareModel):
 
     def __str__(self):
         return f"{self.name} ({self.term})"
+
 class AssessmentPolicy(TenantAwareModel):
     """Defines configuration for grading continuous assessments per term."""
     term = auto_prefetch.ForeignKey(

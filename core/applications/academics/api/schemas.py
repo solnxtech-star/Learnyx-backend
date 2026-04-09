@@ -27,6 +27,7 @@ from core.applications.academics.api.serializers.accessment_entry_serializers im
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     AssessmentEntryCreateSerializer,
     AssessmentEntrySerializer,
+    TeacherSubjectClassTermSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     AssessmentTypeSerializer,
@@ -466,6 +467,24 @@ teachers_dashboard = extend_schema_view(
         responses={200: StudentProfileDetailSerializer},
         tags=["Teacher Dashboard"],
     ),
+
+    subjects=extend_schema(
+        summary="List subjects taught by the teacher",
+        description=(
+            "STEP 4: Fetch subjects assigned to the logged-in teacher along with classroom, "
+            "current academic session, and term.\n\n"
+            "**Frontend flow:**\n"
+            "1. Call this endpoint after fetching classrooms.\n"
+            "2. Render subjects per classroom.\n"
+            "3. Use this information to link to assessment entry or subject results.\n\n"
+            "**Permissions:** Teacher must have a teaching assignment.\n\n"
+            "**Notes:** Optimized with select_related to avoid N+1 queries; session and term "
+            "are injected via context."
+        ),
+        responses={200: TeacherSubjectClassTermSerializer(many=True)},
+        tags=["Teacher Dashboard"],
+    ),
+
 
     # =====================================================
     # STEP 3A — Teacher Subjects (NEW)

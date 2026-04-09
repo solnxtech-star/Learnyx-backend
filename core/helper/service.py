@@ -93,66 +93,99 @@ def load_policy(school_id: int, term_id: int) -> AssessmentPolicy:
 # AGGREGATION ENGINE
 # ---------------------------------------------------------------------
 
-def aggregate_scores(student_ids: List[int], subject_ids: List[int]) -> Dict[Tuple[int, int], Dict[str, Decimal]]:
+def aggregate_scores(student_ids, subject_ids, term=None):
     """
-    Aggregate assessment scores for given student and subject IDs.
-    Returns a dictionary keyed by (student_id, subject_id) with values containing aggregated CA,
-    EXAM, and HALF_TERM scores.
-     The aggregation is done in a single query to optimize performance, and the results are processed
-     in Python to avoid issues with Avg on Decimal fields.
+    Aggregate scores per:
+    (student_id, subject_id) -> {assessment_type_id: total_score}
     """
 
-    logger.info(f"Aggregating scores for {len(student_ids)} students and {len(subject_ids)} subjects")
+    logger.info(f"Aggregating scores for {len(student_ids)} students")
+
+    filters = {
+        "student_id__in": student_ids,
+        "classroom_subject_id__in": subject_ids,
+    }
+
+    # 🔥 IMPORTANT: isolate by term if your model supports it
+    if term:
+        filters["term"] = term
+
     rows = (
-        AssessmentRecord.objects.filter(
-            student_id__in=student_ids,
-            classroom_subject_id__in=subject_ids
+        AssessmentRecord.objects
+        .filter(**filters)
+        .values(
+            "student_id",
+            "classroom_subject_id",
+            "assessment_type_id",
         )
-        .values("student_id", "classroom_subject_id", "period__period_type")
-        .annotate(avg_score=Avg("score"))
+        .annotate(total_score=Sum("score"))
     )
 
-    data = defaultdict(lambda: {"CA": Decimal("0"), "EXAM": Decimal("0"), "HALF_TERM": Decimal("0")})
+    data = {}
 
     for r in rows:
         key = (r["student_id"], r["classroom_subject_id"])
-        score = Decimal(r["avg_score"] or 0)
-        period = r["period__period_type"]
-        if period == "EXAM":
-            data[key]["EXAM"] = score
-        elif period == "HALF_TERM":
-            data[key]["HALF_TERM"] = score
-        else:
-            data[key]["CA"] += score
 
-    logger.info(f"Aggregated scores for {len(data)} student-subject combinations")
+        if key not in data:
+            data[key] = {}
+
+        data[key][r["assessment_type_id"]] = Decimal(
+            r["total_score"] or 0
+        )
+
+    logger.info(f"Aggregated {len(rows)} rows")
+
     return data
 
 # ---------------------------------------------------------------------
 # SCORE ENGINE
 # ---------------------------------------------------------------------
+def load_assessment_types(policy: AssessmentPolicy):
+    return list(
+        policy.assessment_types.all().only(
+            "id", "category", "weight", "max_score", "count"
+        )
+    )
 
-def compute_scores(policy: AssessmentPolicy, term: AcademicTerm, agg: Dict, student_id: int, subject_id: int) -> Tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
+def compute_scores(policy, term, agg, student_id, subject_id, assessment_types):
     record = agg.get((student_id, subject_id), {})
-    ca = record.get("CA", Decimal("0"))
-    exam = record.get("EXAM", Decimal("0"))
-    half = record.get("HALF_TERM", Decimal("0"))
 
-    if term.term_type == "END_OF_TERM":
-        total = (ca * policy.ca_weight / 100) + (exam * policy.exam_weight / 100)
-    elif term.term_type == "HALF_TERM":
-        total = ca
+    category_totals = {}
+
+    for at in assessment_types:
+        raw_score = record.get(at.id, Decimal("0"))
+
+        max_total = Decimal(at.max_score * at.count)
+        if max_total == 0:
+            continue
+
+        normalized = (raw_score / max_total) * at.weight
+
+        #  Dynamic category accumulation
+        category_totals.setdefault(at.category, Decimal("0"))
+        category_totals[at.category] += normalized
+
+    # Extract known categories safely
+    ca_total = category_totals.get("CA", Decimal("0"))
+    exam_total = category_totals.get("EXAM", Decimal("0"))
+    half_total = category_totals.get("HALF_TERM", Decimal("0"))
+
+    # Flexible total computation
+    if term.term_type == "HALF_TERM":
+        total = ca_total
+    elif term.term_type == "END_OF_TERM":
+        total = ca_total + exam_total
     else:
-        total = ca + exam
+        total = sum(category_totals.values())
+
     total = min(total, Decimal("100"))
 
+    # Flexible averaging
     avg = Decimal("0")
-    if term.term_type == "HALF_TERM":
-        parts = [ca] + ([half] if half else [])
-        avg = sum(parts) / Decimal(len(parts))
+    if category_totals:
+        avg = sum(category_totals.values()) / Decimal(len(category_totals))
 
-    logger.debug(f"Computed scores for student_id={student_id}, subject_id={subject_id}: CA={ca}, EXAM={exam}, HALF={half}, TOTAL={total}, AVG={avg}")
-    return ca, exam, half, total, avg
+    return ca_total, exam_total, half_total, total, avg
 
 # ---------------------------------------------------------------------
 # SUBJECT RESULTS (BULK)
@@ -160,19 +193,38 @@ def compute_scores(policy: AssessmentPolicy, term: AcademicTerm, agg: Dict, stud
 
 @transaction.atomic
 def compute_all_subject_results(class_group: ClassRoom, term: AcademicTerm) -> Dict[str, int]:
-    logger.info(f"Computing all subject results for class_group={class_group.id}, term={term.id}")
-    student_ids = list(Student.objects.filter(classroom=class_group).values_list("id", flat=True))
-    subject_ids = list(Subject.objects.filter(class_rooms=class_group).values_list("id", flat=True))
+    logger.info(
+        f"Computing all subject results for class_group={class_group.id}, term={term.id}"
+    )
+
+    # Fetch IDs once
+    student_ids = list(
+        Student.objects.filter(classroom=class_group)
+        .values_list("id", flat=True)
+    )
+
+    subject_ids = list(
+        Subject.objects.filter(class_rooms=class_group)
+        .values_list("id", flat=True)
+    )
 
     if not student_ids or not subject_ids:
-        logger.warning(f"No students or subjects found for class_group={class_group.id}")
+        logger.warning(
+            f"No students or subjects found for class_group={class_group.id}"
+        )
         return {"created": 0, "updated": 0}
 
     school_id = class_group.school_id
+
+    # Load once (critical)
     policy = load_policy(school_id, term.id)
     scales = load_grade_scales(school_id)
+    assessment_types = load_assessment_types(policy)
+
+    # Aggregate once
     agg = aggregate_scores(student_ids, subject_ids)
 
+    # Existing results cache
     existing_results = {
         (r.student_id, r.classroom_subject_id): r
         for r in SubjectResult.objects.filter(
@@ -180,48 +232,100 @@ def compute_all_subject_results(class_group: ClassRoom, term: AcademicTerm) -> D
             classroom_subject_id__in=subject_ids,
             term=term
         ).only(
-            "id", "student_id", "classroom_subject_id",
-            "total_ca", "exam_score", "half_term_score",
-            "total_score", "average_score", "grade", "grade_point", "comment"
+            "id",
+            "student_id",
+            "classroom_subject_id",
+            "total_ca",
+            "exam_score",
+            "half_term_score",
+            "total_score",
+            "average_score",
+            "grade",
+            "grade_point",
+            "comment",
         )
     }
 
-    to_create, to_update = [], []
+    to_create = []
+    to_update = []
 
-    for student_id in student_ids:
-        for subject_id in subject_ids:
-            ca, exam, half, total, avg = compute_scores(policy, term, agg, student_id, subject_id)
-            if term.term_type == "END_OF_TERM":
-                grade, point, remark = map_grade(total, scales)
-            else:
-                grade, point, remark = None, None, "Progress assessment"
+    is_end_term = term.term_type == "END_OF_TERM"
 
-            payload = {
-                "total_ca": ca, "exam_score": exam, "half_term_score": half,
-                "total_score": total, "average_score": avg,
-                "grade": grade, "grade_point": point, "comment": remark
-            }
+    payload_fields = [
+        "total_ca",
+        "exam_score",
+        "half_term_score",
+        "total_score",
+        "average_score",
+        "grade",
+        "grade_point",
+        "comment",
+    ]
 
-            key = (student_id, subject_id)
-            if key in existing_results:
-                obj = existing_results[key]
-                for field, value in payload.items():
-                    setattr(obj, field, value)
-                to_update.append(obj)
-            else:
-                to_create.append(
-                    SubjectResult(student_id=student_id, classroom_subject_id=subject_id, term=term, **payload)
+    # 🔥 Optimization: only iterate through existing agg keys + missing combos
+    all_keys = set(existing_results.keys()) | set(agg.keys())
+
+    for student_id, subject_id in all_keys:
+        ca, exam, half, total, avg = compute_scores(
+            policy,
+            term,
+            agg,
+            student_id,
+            subject_id,
+            assessment_types,
+        )
+
+        # Grade
+        if is_end_term:
+            grade, point, remark = map_grade(total, scales)
+        else:
+            grade, point, remark = None, None, "Progress assessment"
+
+        payload = {
+            "total_ca": ca,
+            "exam_score": exam,
+            "half_term_score": half,
+            "total_score": total,
+            "average_score": avg,
+            "grade": grade,
+            "grade_point": point,
+            "comment": remark,
+        }
+
+        obj = existing_results.get((student_id, subject_id))
+
+        if obj:
+            for field, value in payload.items():
+                setattr(obj, field, value)
+            to_update.append(obj)
+        else:
+            to_create.append(
+                SubjectResult(
+                    student_id=student_id,
+                    classroom_subject_id=subject_id,
+                    term=term,
+                    **payload,
                 )
+            )
 
     if to_create:
         SubjectResult.objects.bulk_create(to_create, batch_size=1000)
-        logger.info(f"Created {len(to_create)} SubjectResult records")
+
     if to_update:
-        SubjectResult.objects.bulk_update(to_update, fields=list(payload.keys()), batch_size=1000)
-        logger.info(f"Updated {len(to_update)} SubjectResult records")
+        SubjectResult.objects.bulk_update(
+            to_update,
+            fields=payload_fields,
+            batch_size=1000,
+        )
 
-    return {"created": len(to_create), "updated": len(to_update)}
+    logger.info(
+        f"Subject results computed: created={len(to_create)}, updated={len(to_update)}"
+    )
 
+    return {
+        "created": len(to_create),
+        "updated": len(to_update),
+    }
 # ---------------------------------------------------------------------
 # TERM SUMMARY (BULK)
 # ---------------------------------------------------------------------
