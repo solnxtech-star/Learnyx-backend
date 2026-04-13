@@ -66,3 +66,12 @@ class AcademicTrack(models.TextChoices):
     SCIENCE = "SCIENCE", "Science"
     ARTS = "ARTS", "Arts"
     COMMERCIAL = "COMMERCIAL", "Commercial"
+
+class ReviewStatus(models.TextChoices):
+        PENDING  = "pending",  "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+class Stage(models.TextChoices):
+        HALF_TERM = "HALF_TERM", _("Half Term")
+        END_OF_TERM = "END_OF_TERM", _("End of Term")

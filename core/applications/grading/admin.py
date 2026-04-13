@@ -41,7 +41,7 @@ class TargetGradeAdmin(admin.ModelAdmin):
 @admin.register(GradeScale)
 class GradeScaleAdmin(admin.ModelAdmin):
     list_display = (
-        "id", "school", "term", "max_score",
+        "id", "school", "term", "is_active", "min_score", "max_score",
         "class_room", "version", "effective_from",
     )
     search_fields = ("term__name", "class_room__name", "version")

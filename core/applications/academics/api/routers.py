@@ -13,7 +13,7 @@ from core.applications.academics.api.views.accessment_entry_views import (
 )
 from core.applications.academics.api.views.accessment_entry_views import StudentViewSet
 from core.applications.academics.api.views.teachers_dashboard_views import (
-    TeacherDashboardViewSet,
+    TeacherDashboardViewSet, TeacherAssessmentRecordViewSet
 )
 
 PREFIX = "academics"
@@ -39,6 +39,11 @@ router.register(
     "teachers-dashboard",
     TeacherDashboardViewSet,
     basename="teachers-dashboard",
+)
+router.register(
+    "teacher-assessment-records",
+    TeacherAssessmentRecordViewSet,
+    basename="teacher-assessment-records",
 )
 router.register(
     "students",

@@ -1,5 +1,6 @@
 from django.db.models import QuerySet
 from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.utils import extend_schema
 from rest_framework import viewsets
 from rest_framework.filters import OrderingFilter
 from rest_framework.filters import SearchFilter
@@ -14,6 +15,9 @@ from core.applications.grading.api.serializers.grade_student_serializer import (
 from core.applications.users.models import StudentProfile
 
 
+@extend_schema(
+    tags=["Grading"],
+)
 class StudentProfileViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Read-only ViewSet for Students.

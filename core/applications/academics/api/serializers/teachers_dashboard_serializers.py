@@ -4,14 +4,17 @@ from django.db import models
 from django.db import transaction
 from django.db.models import Max
 from django.db.models import Sum
+from django.utils import timezone
+from core.helper.enums import ReviewStatus
 from rest_framework import serializers
 
-from core.applications.academics.models import AssessmentRecord
+from core.applications.academics.models import AcademicTerm, AssessmentRecord
 from core.applications.academics.models import AssessmentType
 from core.applications.academics.models import ClassRoom
 from core.applications.academics.models import StudentSubjectEnrollment
 from core.applications.academics.models import Subject
 from core.applications.academics.models import TeachingAssignment
+from core.applications.academics.models import TermPeriod
 from core.applications.grading.models import SubjectResult
 from core.applications.users.models import StudentContact
 from core.applications.users.models import StudentProfile
@@ -369,6 +372,15 @@ class AssessmentTypeSerializer(serializers.ModelSerializer):
             "term_id",
         )
 
+def resolve_stage_from_period(period) -> str:
+    """
+    Map a TermPeriod's period_type to a SubjectResult.Stage.
+    - EXAM period      → END_OF_TERM (final results with grades)
+    - Everything else  → HALF_TERM (progress check, no grades)
+    """
+    if period and period.period_type == TermPeriod.PeriodType.EXAM:
+        return SubjectResult.Stage.END_OF_TERM
+    return SubjectResult.Stage.HALF_TERM
 
 class AssessmentValidationMixin:
     """
@@ -376,6 +388,13 @@ class AssessmentValidationMixin:
     """
 
     def validate_student_subject_term(self, student, subject, assessment_type):
+        """
+        Validates that:
+        - The term associated with the assessment type is active.
+        - The subject is assigned to the student's classroom.
+        - The student is enrolled in the subject for the term and session.
+         Raises serializers.ValidationError if any check fails.
+        """
         policy = assessment_type.policy
         term = policy.term
         session = term.session
@@ -406,24 +425,22 @@ class AssessmentValidationMixin:
                 )
             })
 
-    def validate_assessment_score(
-        self,
-        student,
-        subject,
-        assessment_type,
-        score,
-        instance=None,
-    ):
+    def validate_assessment_score(self, student, subject, assessment_type, score, instance=None):
+        """
+        Validates that the score is:
+        - Non-negative
+        - Does not exceed the assessment type's max score
+        - Cumulative score for this assessment type does not exceed max total
+        (max_score * count), accounting for existing records and updates.
+         Raises serializers.ValidationError if any check fails.
+        """
+
         if score < 0:
-            raise serializers.ValidationError({
-                "score": "Score cannot be negative."
-            })
+            raise serializers.ValidationError({"score": "Score cannot be negative."})
 
         if score > assessment_type.max_score:
             raise serializers.ValidationError({
-                "score": (
-                    f"Score cannot exceed {assessment_type.max_score}."
-                )
+                "score": f"Score cannot exceed {assessment_type.max_score}."
             })
 
         existing_total = (
@@ -438,7 +455,6 @@ class AssessmentValidationMixin:
             existing_total -= instance.score
 
         max_total = assessment_type.max_score * assessment_type.count
-
         if existing_total + score > max_total:
             raise serializers.ValidationError({
                 "score": (
@@ -448,6 +464,12 @@ class AssessmentValidationMixin:
             })
 
     def get_next_index(self, student, subject, assessment_type):
+        """
+        Determines the next index for a new assessment record based on existing records for the same student, subject, and assessment type.
+         This ensures proper ordering of multiple records for the same assessment type.
+         Returns the next index as an integer.
+        """
+
         last_index = (
             AssessmentRecord.objects.filter(
                 student=student,
@@ -464,19 +486,10 @@ class AssessmentEntryCreateSerializer(
     serializers.ModelSerializer,
     AssessmentValidationMixin,
 ):
-    """
-    Handles creation and update of a single assessment record.
-    Includes full domain validation via mixin.
-    """
+    """Handles creation of a single assessment record with full domain validation."""
 
-    student = serializers.PrimaryKeyRelatedField(
-        queryset=StudentProfile.objects.all()
-    )
-
-    assessment_type = serializers.PrimaryKeyRelatedField(
-        queryset=AssessmentType.objects.all()
-    )
-
+    student = serializers.PrimaryKeyRelatedField(queryset=StudentProfile.objects.all())
+    assessment_type = serializers.PrimaryKeyRelatedField(queryset=AssessmentType.objects.all())
     subject = serializers.PrimaryKeyRelatedField(
         queryset=Subject.objects.filter(is_active=True),
         write_only=True,
@@ -484,32 +497,19 @@ class AssessmentEntryCreateSerializer(
 
     class Meta:
         model = AssessmentRecord
-        fields = (
-            "student",
-            "assessment_type",
-            "subject",
-            "score",
-            "date_taken",
-        )
+        fields = ("student", "assessment_type", "subject", "score", "date_taken")
 
     def validate(self, attrs):
-        student = attrs["student"]
-        subject = attrs["subject"]
-        assessment_type = attrs["assessment_type"]
-        score = attrs["score"]
-
         self.validate_student_subject_term(
-            student, subject, assessment_type
+            attrs["student"], attrs["subject"], attrs["assessment_type"]
         )
-
         self.validate_assessment_score(
-            student,
-            subject,
-            assessment_type,
-            score,
+            attrs["student"],
+            attrs["subject"],
+            attrs["assessment_type"],
+            attrs["score"],
             instance=getattr(self, "instance", None),
         )
-
         return attrs
 
     def create(self, validated_data):
@@ -518,173 +518,360 @@ class AssessmentEntryCreateSerializer(
         assessment_type = validated_data["assessment_type"]
 
         validated_data["classroom_subject"] = subject
-        validated_data["index"] = self.get_next_index(
-            student, subject, assessment_type
-        )
-
+        validated_data["index"] = self.get_next_index(student, subject, assessment_type)
         return AssessmentRecord.objects.create(**validated_data)
 
     def update(self, instance, validated_data):
-        subject = validated_data.get(
-            "subject",
-            instance.classroom_subject,
-        )
-        student = validated_data.get(
-            "student",
-            instance.student,
-        )
-        assessment_type = validated_data.get(
-            "assessment_type",
-            instance.assessment_type,
-        )
+        subject = validated_data.get("subject", instance.classroom_subject)
+        student = validated_data.get("student", instance.student)
+        assessment_type = validated_data.get("assessment_type", instance.assessment_type)
         score = validated_data.get("score", instance.score)
 
-        self.validate_student_subject_term(
-            student, subject, assessment_type
-        )
-
-        self.validate_assessment_score(
-            student,
-            subject,
-            assessment_type,
-            score,
-            instance=instance,
-        )
+        self.validate_student_subject_term(student, subject, assessment_type)
+        self.validate_assessment_score(student, subject, assessment_type, score, instance=instance)
 
         instance.student = student
         instance.assessment_type = assessment_type
         instance.classroom_subject = subject
         instance.score = score
-        instance.date_taken = validated_data.get(
-            "date_taken",
-            instance.date_taken,
-        )
-
+        instance.date_taken = validated_data.get("date_taken", instance.date_taken)
         instance.save()
-
         return instance
+
+class AssessmentRecordUpdateSerializer(serializers.ModelSerializer):
+    id = serializers.CharField()
+
+    class Meta:
+        model = AssessmentRecord
+        fields = ["id", "score", "date_taken"]
+        read_only_fields = ["id"]
+
+    def validate(self, attrs):
+        if self.instance and self.instance.status == "approved":
+            raise serializers.ValidationError(
+                "This assessment has been approved and cannot be updated."
+            )
+        return attrs
+
+    def update(self, instance, validated_data):
+        if "score" in validated_data:
+            instance.score = validated_data["score"]
+        if "date_taken" in validated_data:
+            instance.date_taken = validated_data["date_taken"]
+        instance.status = "pending"
+        instance.save()
+        return instance
+
 # -----------------------------
 # Bulk entry serializer
 # -----------------------------
 
+
 class BulkAssessmentEntryItemSerializer(serializers.Serializer):
-    """
-    Represents a single entry inside a bulk request.
-    """
+    """Single entry inside bulk request."""
 
     student_id = serializers.PrimaryKeyRelatedField(
-        queryset=StudentProfile.objects.all(),
-        source="student",
+        queryset=StudentProfile.objects.all(), source="student"
     )
-
     assessment_type_id = serializers.PrimaryKeyRelatedField(
-        queryset=AssessmentType.objects.all(),
-        source="assessment_type",
+        queryset=AssessmentType.objects.all(), source="assessment_type"
     )
-
     score = serializers.FloatField(min_value=0)
+    date_taken = serializers.DateField(required=False, allow_null=True)
+
 
 class BulkAssessmentEntrySerializer(serializers.Serializer, AssessmentValidationMixin):
     subject_id = serializers.PrimaryKeyRelatedField(
         queryset=Subject.objects.filter(is_active=True),
         source="subject",
     )
-
     entries = BulkAssessmentEntryItemSerializer(many=True)
 
     def validate(self, attrs):
         if not attrs["entries"]:
-            raise serializers.ValidationError({
-                "entries": "Entries list cannot be empty."
-            })
+            raise serializers.ValidationError(
+                {"entries": "Entries list cannot be empty."}
+            )
         return attrs
 
+    # ---------------------------------------------------------
+    # HELPERS
+    # ---------------------------------------------------------
+    def _normalize_date_taken(self, date_taken):
+        """Return today if date_taken was not provided."""
+        return date_taken or timezone.localdate()
+
+    def _resolve_term(self):
+        """
+        Resolve the currently active AcademicTerm.
+        No date guessing — if no term is active, submission is blocked.
+
+        Returns:
+            AcademicTerm
+
+        Raises:
+            ValidationError if no active term exists.
+        """
+        term = AcademicTerm.objects.filter(is_active=True).first()
+
+        if not term:
+            raise serializers.ValidationError(
+                "No active AcademicTerm found. "
+                "An administrator must activate a term before assessments can be submitted."
+            )
+
+        return term
+
+    def _resolve_period(self, term):
+        """
+        Resolve the currently active TermPeriod within the given term.
+        No date guessing — if no period is active, submission is blocked.
+
+        Returns:
+            TermPeriod
+
+        Raises:
+            ValidationError if no active period exists.
+        """
+        period = TermPeriod.objects.filter(
+            term=term,
+            is_active=True,
+        ).first()
+
+        if not period:
+            available = list(
+                TermPeriod.objects.filter(term=term).values(
+                    "id", "name", "period_type", "start_date", "end_date", "is_active"
+                )
+            )
+            logger.error(
+                "[AssessmentEntry] No active TermPeriod found for term=%s. "
+                "Available periods: %s",
+                term.id,
+                available,
+            )
+            raise serializers.ValidationError(
+                f"No active TermPeriod found for term '{term.name}'. "
+                "An administrator must open a period before assessments can be submitted."
+            )
+
+        return period
+
+    def _validate_date_within_period(self, date_taken, period):
+        """
+        Ensure date_taken falls within the active period's date window.
+
+        Raises:
+            ValidationError if date_taken is outside the active period.
+        """
+        if not (period.start_date <= date_taken <= period.end_date):
+            raise serializers.ValidationError(
+                f"date_taken={date_taken} falls outside the active period "
+                f"'{period.name}' ({period.start_date} → {period.end_date}). "
+                "Please use a date within the current open period."
+            )
+
+    # ---------------------------------------------------------
+    # CREATE
+    # ---------------------------------------------------------
     def create(self, validated_data):
         subject = validated_data["subject"]
         entries = validated_data["entries"]
 
-        records = []
-        errors = []
+        created, updated, errors = [], [], []
+
+        logger.info(
+            "[AssessmentEntry] Bulk create started — subject=%s, entry_count=%d",
+            subject.id,
+            len(entries),
+        )
+
+        # ---------------------------------------------------------
+        # Resolve term and period ONCE for the entire batch.
+        # These are system-level state — they don't change per entry.
+        # If either is missing, the whole batch is rejected upfront.
+        # ---------------------------------------------------------
+        term = self._resolve_term()
+        period = self._resolve_period(term)
+
+        logger.info(
+            "[AssessmentEntry] Active context — term=%s, period=%s (%s → %s)",
+            term.id,
+            period.name,
+            period.start_date,
+            period.end_date,
+        )
 
         for idx, entry in enumerate(entries):
             try:
-                student = entry["student"]
+                student         = entry["student"]
                 assessment_type = entry["assessment_type"]
-                score = entry["score"]
+                score           = entry["score"]
+                date_taken      = self._normalize_date_taken(entry.get("date_taken"))
 
-                self.validate_student_subject_term(
-                    student, subject, assessment_type
-                )
+                # Validate date_taken is within the active period
+                self._validate_date_within_period(date_taken, period)
 
-                self.validate_assessment_score(
-                    student,
-                    subject,
-                    assessment_type,
-                    score,
-                )
+                # Mixin validation
+                self.validate_student_subject_term(student, subject, assessment_type)
+                self.validate_assessment_score(student, subject, assessment_type, score)
 
-                records.append(
-                    AssessmentRecord(
+                # --- Upsert ---
+                record = AssessmentRecord.objects.filter(
+                    student=student,
+                    classroom_subject=subject,
+                    assessment_type=assessment_type,
+                ).first()
+
+                if record:
+                    if record.status == ReviewStatus.APPROVED:
+                        raise serializers.ValidationError(
+                            f"Assessment for {student.user.name} in {subject.name} "
+                            f"({assessment_type.name}) is already approved and cannot be updated."
+                        )
+
+                    record.score      = score
+                    record.date_taken = date_taken
+                    record.status     = ReviewStatus.PENDING
+                    record.period     = period  # always sync to current active period
+                    record.save()
+                    updated.append(record)
+
+                else:
+                    record = AssessmentRecord.objects.create(
                         student=student,
                         classroom_subject=subject,
                         assessment_type=assessment_type,
                         score=score,
-                        index=self.get_next_index(
-                            student,
-                            subject,
-                            assessment_type,
-                        ),
+                        index=self.get_next_index(student, subject, assessment_type),
+                        date_taken=date_taken,
+                        period=period,
                     )
-                )
+                    created.append(record)
 
             except Exception as e:
-                errors.append({
-                    "index": idx,
-                    "error": str(e)
-                })
+                logger.exception(
+                    "[AssessmentEntry] Error at idx=%d, student=%s: %s",
+                    idx,
+                    entry.get("student"),
+                    e,
+                )
+                errors.append({"index": idx, "error": str(e)})
 
-        created = AssessmentRecord.objects.bulk_create(records, batch_size=1000)
+        logger.info(
+            "[AssessmentEntry] Done — created=%d, updated=%d, errors=%d",
+            len(created),
+            len(updated),
+            len(errors),
+        )
 
-        return {
-            "created": created,
-            "errors": errors,
-        }
+        return {"created": created, "updated": updated, "errors": errors}
+
+
+    # ---------------------------------------------------------
+    # MAIN CREATE LOGIC
+    # ---------------------------------------------------------
+    # def create(self, validated_data):
+    #     subject = validated_data["subject"]
+    #     entries = validated_data["entries"]
+
+    #     created, updated, errors = [], [], []
+
+    #     logger.info(
+    #         f"[AssessmentEntry] Bulk create: subject={subject.id}, "
+    #         f"entries={len(entries)}"
+    #     )
+
+    #     for idx, entry in enumerate(entries):
+    #         try:
+    #             student = entry["student"]
+    #             assessment_type = entry["assessment_type"]
+    #             score = entry["score"]
+
+    #             self.validate_student_subject_term(student, subject, assessment_type)
+    #             self.validate_assessment_score(student, subject, assessment_type, score)
+
+    #             # ---------------------------------------------------------
+    #             # FIX #2: GET TERM PROPERLY FROM ASSESSMENT TYPE
+    #             # ---------------------------------------------------------
+    #             term = assessment_type.policy.term
+
+    #             # ---------------------------------------------------------
+    #             # FIX #3: RESOLVE PERIOD PROPERLY (NO MORE "TODAY")
+    #             # ---------------------------------------------------------
+    #             period = self._resolve_period(term, assessment_type)
+
+    #             record = AssessmentRecord.objects.filter(
+    #                 student=student,
+    #                 classroom_subject=subject,
+    #                 assessment_type=assessment_type,
+    #             ).first()
+
+    #             if record:
+    #                 if record.status == "approved":
+    #                     raise serializers.ValidationError(
+    #                         f"Assessment for {student.user.name} in {subject.name} "
+    #                         f"({assessment_type.name}) is approved and cannot be updated."
+    #                     )
+
+    #                 record.score = score
+    #                 record.date_taken = entry.get("date_taken", record.date_taken)
+    #                 record.status = "pending"
+
+    #                 # IMPORTANT FIX: always ensure period exists
+    #                 if not record.period:
+    #                     record.period = period
+
+    #                 record.save()
+    #                 updated.append(record)
+
+    #             else:
+    #                 record = AssessmentRecord.objects.create(
+    #                     student=student,
+    #                     classroom_subject=subject,
+    #                     assessment_type=assessment_type,
+    #                     score=score,
+    #                     index=self.get_next_index(student, subject, assessment_type),
+    #                     date_taken=entry.get("date_taken"),
+    #                     period=period,   # ✅ ALWAYS SET PROPERLY
+    #                 )
+    #                 created.append(record)
+
+    #         except Exception as e:
+    #             logger.error(f"[AssessmentEntry] Error at idx={idx}: {e}", exc_info=True)
+    #             errors.append({"index": idx, "error": str(e)})
+
+    #     logger.info(
+    #         f"[AssessmentEntry] Done — created={len(created)}, "
+    #         f"updated={len(updated)}, errors={len(errors)}"
+    #     )
+
+    #     return {
+    #         "created": created,
+    #         "updated": updated,
+    #         "errors": errors
+    #     }
+
+class BulkAssessmentUpdateSerializer(serializers.Serializer):
+    entries = AssessmentRecordUpdateSerializer(many=True)
+
+    def validate(self, attrs):
+        if not attrs.get("entries"):
+            raise serializers.ValidationError({"entries": "Entries list cannot be empty."})
+        return attrs
 
 class AssessmentEntrySerializer(serializers.ModelSerializer):
-    """
-    Read-only serializer for assessment records.
-    """
+    """Read-only serializer for assessment records."""
 
-    subject_id = serializers.UUIDField(
-        source="classroom_subject.id",
-        read_only=True,
-    )
-    subject_name = serializers.CharField(
-        source="classroom_subject.name",
-        read_only=True,
-    )
-
-    assessment_name = serializers.CharField(
-        source="assessment_type.name",
-        read_only=True,
-    )
-    category = serializers.CharField(
-        source="assessment_type.category",
-        read_only=True,
-    )
-    weight = serializers.CharField(
-        source="assessment_type.weight",
-        read_only=True,
-    )
-    max_score = serializers.CharField(
-        source="assessment_type.max_score",
-        read_only=True,
-    )
-
-    percentage = serializers.FloatField(
-        source="percentage_score",
-        read_only=True,
-    )
+    subject_id = serializers.UUIDField(source="classroom_subject.id", read_only=True)
+    subject_name = serializers.CharField(source="classroom_subject.name", read_only=True)
+    assessment_name = serializers.CharField(source="assessment_type.name", read_only=True)
+    category = serializers.CharField(source="assessment_type.category", read_only=True)
+    weight = serializers.CharField(source="assessment_type.weight", read_only=True)
+    max_score = serializers.CharField(source="assessment_type.max_score", read_only=True)
+    percentage = serializers.FloatField(source="percentage_score", read_only=True)
+    period_name = serializers.CharField(source="period.name", read_only=True, default=None)
+    period_type = serializers.CharField(source="period.period_type", read_only=True, default=None)
 
     class Meta:
         model = AssessmentRecord
@@ -698,7 +885,11 @@ class AssessmentEntrySerializer(serializers.ModelSerializer):
             "max_score",
             "score",
             "percentage",
+            "remarks",
+            "status",
             "date_taken",
+            "period_name",
+            "period_type",
         )
         read_only_fields = fields
 

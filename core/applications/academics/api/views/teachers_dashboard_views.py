@@ -1,8 +1,11 @@
 import logging
+from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import Prefetch
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
 from rest_framework import status
@@ -13,6 +16,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from core.applications.academics.api.schemas import accessment_record_schema
 from core.applications.academics.api.schemas import teachers_dashboard
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     AssessmentEntryCreateSerializer,
@@ -21,7 +25,13 @@ from core.applications.academics.api.serializers.teachers_dashboard_serializers 
     AssessmentEntrySerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    AssessmentRecordUpdateSerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     BulkAssessmentEntrySerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    BulkAssessmentUpdateSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     ClassroomStudentSerializer,
@@ -53,12 +63,18 @@ from core.applications.academics.api.serializers.teachers_dashboard_serializers 
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     TeacherSubjectClassTermSerializer,
 )
-from core.applications.academics.models import AcademicSession, AcademicTerm, AssessmentRecord
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    resolve_stage_from_period,
+)
+from core.applications.academics.models import AcademicSession
+from core.applications.academics.models import AcademicTerm
+from core.applications.academics.models import AssessmentRecord
 from core.applications.academics.models import AssessmentType
 from core.applications.academics.models import ClassRoom
 from core.applications.academics.models import StudentClassAssignment
 from core.applications.academics.models import StudentSubjectEnrollment
 from core.applications.academics.models import TeachingAssignment
+from core.applications.academics.models import TermPeriod
 from core.applications.academics.services.student_class_service import (
     get_student_active_classroom,
 )
@@ -465,110 +481,6 @@ class TeacherDashboardViewSet(
 
 
 
-    # -----------------------------
-    # Single Assessment Entry Endpoint
-    # -----------------------------
-    @action(detail=False, methods=["post"], url_path="assessments/enter")
-    def enter_assessment(self, request):
-        teacher = self._get_teacher(request.user)
-        serializer = AssessmentEntryCreateSerializer(data=request.data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
-
-        student = serializer.validated_data["student"]
-        subject = serializer.validated_data["subject"]
-        assessment_type = serializer.validated_data["assessment_type"]
-        score = serializer.validated_data.get("score")
-
-        student_name = student.user.name or "Student"
-        classroom = get_student_active_classroom(student)
-
-        # Teacher authorization
-        if not TeachingAssignment.objects.filter(teacher=teacher, classroom=classroom, subject=subject).exists():
-            raise PermissionDenied(f"You are not assigned to teach {subject.name} in {student_name}'s classroom.")
-
-        term = get_term_from_assessment(assessment_type)
-
-        # Validate enrollment
-        if not StudentSubjectEnrollment.objects.filter(student=student, subject=subject, term=term).exists():
-            raise ValidationError({"detail": f"{student_name} is not enrolled in {subject.name} for this term."})
-
-        # Persist record
-        record = AssessmentRecord.objects.create(
-            student=student,
-            classroom_subject=subject,
-            assessment_type=assessment_type,
-            score=score,
-            index=serializer.get_next_index(student, subject, assessment_type),
-        )
-
-        # Compute subject results and term summary
-        try:
-            result_summary = compute_all_subject_results(class_group=student.class_group, term=term)
-            term_summaries = compute_term_summary(class_group=student.class_group, term=term)
-            logger.info(
-                f"Computed subject results and term summary for classroom={student.class_group.id}, term={term.id}",
-                extra={"result_summary": result_summary, "summaries_count": len(term_summaries)}
-            )
-        except Exception as e:
-            logger.exception(f"Failed to compute results/term summary for classroom={student.class_group.id}, term={term.id}: {e}")
-
-        logger.info(
-            "Assessment record created",
-            extra={"student_id": student.id, "subject_id": subject.id, "term_id": term.id, "teacher_id": teacher.id},
-        )
-
-        return Response(AssessmentEntrySerializer(record).data, status=status.HTTP_201_CREATED)
-
-
-    @action(detail=False, methods=["post"], url_path="assessments/enter-bulk")
-    def enter_bulk_assessments(self, request):
-        teacher = self._get_teacher(request.user)
-
-        serializer = BulkAssessmentEntrySerializer(
-            data=request.data,
-            context={"request": request}
-        )
-        serializer.is_valid(raise_exception=True)
-
-        subject = serializer.validated_data["subject"]
-
-        result = serializer.save()
-
-        created_records = result["created"]
-        errors = result["errors"]
-
-        classrooms_terms_map = {}
-
-        # Preload teacher classrooms
-        teacher_classrooms = set(
-            TeachingAssignment.objects.filter(
-                teacher=teacher,
-                subject=subject
-            ).values_list("classroom_id", flat=True)
-        )
-
-        # Track affected classrooms/terms
-        for record in created_records:
-            classroom = get_student_active_classroom(record.student)
-            term = get_term_from_assessment(record.assessment_type)
-
-            if classroom.id not in teacher_classrooms:
-                continue  # already validated earlier ideally
-
-            classrooms_terms_map.setdefault(classroom, set()).add(term)
-
-        # Compute results once
-        for classroom, terms in classrooms_terms_map.items():
-            for term in terms:
-                compute_all_subject_results(classroom, term)
-                compute_term_summary(classroom, term)
-
-        return Response({
-            "created_count": len(created_records),
-            "error_count": len(errors),
-            "errors": errors,
-            "data": AssessmentEntrySerializer(created_records, many=True).data
-        }, status=status.HTTP_201_CREATED)
     # ------------------------------------------------------------------
     # ASSESSMENT VIEWING (READ)
     # ------------------------------------------------------------------
@@ -699,4 +611,302 @@ class TeacherDashboardViewSet(
 
         return Response(
             StudentContactSerializer(contacts, many=True).data,
+        )
+
+@extend_schema(tags=["Teacher Dashboard"])
+@accessment_record_schema
+class TeacherAssessmentRecordViewSet(viewsets.ModelViewSet):
+    """
+    Handles AssessmentRecords: bulk creation, single entry, retrieval, update.
+    Stage is inferred from the active TermPeriod at the time of submission.
+    """
+
+    queryset = AssessmentRecord.objects.all().select_related(
+        "student", "classroom_subject", "assessment_type", "period"
+    )
+    permission_classes = [IsAuthenticated, IsSchoolAdminOrAssignedTeacher]
+
+    def get_serializer_class(self):
+        if self.action in ["list", "retrieve"]:
+            return AssessmentEntrySerializer
+        elif self.action == "create":
+            return BulkAssessmentEntrySerializer
+        elif self.action == "single_entry":
+            return AssessmentEntryCreateSerializer
+        elif self.action == "bulk_update":
+            return BulkAssessmentUpdateSerializer
+        elif self.action == "update":
+            return AssessmentRecordUpdateSerializer
+        return AssessmentEntrySerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        teacher = self._get_teacher(self.request.user)
+        if not teacher:
+            return queryset.none()
+
+        assignments = TeachingAssignment.objects.filter(teacher=teacher)
+        query = Q()
+        for assignment in assignments:
+            query |= Q(
+                classroom_subject_id=assignment.subject_id,
+                student__classroom_id=assignment.classroom_id,
+            )
+        queryset = queryset.filter(query)
+
+        student_id = self.request.query_params.get("student_id")
+        classroom_id = self.request.query_params.get("classroom_id")
+        subject_id = self.request.query_params.get("subject_id")
+        term_id = self.request.query_params.get("term_id")
+        status_param = self.request.query_params.get("status")
+
+        if student_id:
+            queryset = queryset.filter(student_id=student_id)
+        if classroom_id:
+            queryset = queryset.filter(student__classroom_id=classroom_id)
+        if subject_id:
+            queryset = queryset.filter(classroom_subject_id=subject_id)
+        if term_id:
+            queryset = queryset.filter(assessment_type__policy__term_id=term_id)
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+
+        return queryset.order_by("-date_taken", "-id")
+
+    def _get_teacher(self, user):
+        try:
+            return user.teacherprofile
+        except TeacherProfile.DoesNotExist:
+            return None
+
+    def _trigger_result_computation(self, records: list):
+        """
+        Compute subject results and term summaries for all affected
+        classroom/term/stage combinations.
+
+        Stage is derived from the record's period type if available,
+        otherwise defaults to HALF_TERM.
+        """
+        # Group by (classroom, term, stage)
+        groups = {}
+
+        for record in records:
+            classroom = get_student_active_classroom(record.student)
+            term = get_term_from_assessment(record.assessment_type)
+
+            if not classroom or not term:
+                logger.warning(
+                    f"[Computation] Skipping record={record.id} — "
+                    f"missing classroom or term"
+                )
+                continue
+
+            # Derive stage from period type — default to HALF_TERM if no period
+            if record.period and record.period.period_type == TermPeriod.PeriodType.EXAM:
+                stage = SubjectResult.Stage.END_OF_TERM
+            else:
+                stage = SubjectResult.Stage.HALF_TERM
+
+            key = (classroom.id, term.id, stage)
+            groups.setdefault(key, (classroom, term, stage))
+
+        for key, (classroom, term, stage) in groups.items():
+            try:
+                logger.info(
+                    f"[Computation] Running: classroom={classroom.id}, "
+                    f"term={term.id}, stage={stage}"
+                )
+                compute_all_subject_results(class_group=classroom, term=term, stage=stage)
+                compute_term_summary(class_group=classroom, term=term, stage=stage)
+            except Exception as e:
+                logger.exception(
+                    f"[Computation] Failed: classroom={classroom.id}, "
+                    f"term={term.id}, stage={stage}: {e}"
+                )
+
+    # ---------------------------------------------------------
+    # Bulk create
+    # ---------------------------------------------------------
+
+    def create(self, request, *args, **kwargs):
+        teacher = self._get_teacher(request.user)
+        if not teacher:
+            raise PermissionDenied("Teacher profile not found.")
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        subject = serializer.validated_data["subject"]
+
+        teacher_classrooms = set(
+            TeachingAssignment.objects.filter(teacher=teacher, subject=subject)
+            .values_list("classroom_id", flat=True)
+        )
+
+        result = serializer.save()
+        created_records = result["created"]
+        updated_records = result["updated"]
+        errors = result["errors"]
+
+        # Filter to only records in classrooms this teacher is assigned to
+        all_records = [
+            r for r in created_records + updated_records
+            if get_student_active_classroom(r.student) and
+            get_student_active_classroom(r.student).id in teacher_classrooms
+        ]
+
+        # active_period = serializer._get_active_period()
+        self._trigger_result_computation(all_records)
+
+        return Response(
+            {
+                "created_count": len(created_records),
+                "updated_count": len(updated_records),
+                "error_count": len(errors),
+                "errors": errors,
+                "data": AssessmentEntrySerializer(
+                    created_records + updated_records, many=True
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    # ---------------------------------------------------------
+    # Single entry
+    # ---------------------------------------------------------
+
+    @action(detail=False, methods=["post"], url_path="single")
+    def single_entry(self, request):
+        teacher = self._get_teacher(request.user)
+        if not teacher:
+            raise PermissionDenied("Teacher profile not found.")
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        student = serializer.validated_data["student"]
+        subject = serializer.validated_data["subject"]
+        assessment_type = serializer.validated_data["assessment_type"]
+        classroom = get_student_active_classroom(student)
+
+        if not TeachingAssignment.objects.filter(
+            teacher=teacher, classroom=classroom, subject=subject
+        ).exists():
+            raise PermissionDenied(
+                f"You are not assigned to teach {subject.name} in "
+                f"{getattr(student.user, 'name', 'this student')}'s classroom."
+            )
+
+        term = get_term_from_assessment(assessment_type)
+        record = serializer.save()
+
+        # Resolve active period for stage inference
+        today = timezone.now().date()
+        active_period = TermPeriod.objects.filter(
+            term=term,
+            start_date__lte=today,
+            end_date__gte=today,
+        ).first()
+
+        stage = resolve_stage_from_period(active_period)
+
+        try:
+            compute_all_subject_results(class_group=classroom, term=term, stage=stage)
+            compute_term_summary(class_group=classroom, term=term, stage=stage)
+        except Exception as e:
+            logger.exception(
+                f"Result computation failed: classroom={classroom.id}, "
+                f"term={term.id}, stage={stage}: {e}"
+            )
+
+        return Response(
+            AssessmentEntrySerializer(record).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    # ---------------------------------------------------------
+    # Bulk update
+    # ---------------------------------------------------------
+
+    @action(detail=False, methods=["put"], url_path="bulk-update")
+    def bulk_update(self, request):
+        teacher = self._get_teacher(request.user)
+        if not teacher:
+            raise PermissionDenied("Teacher profile not found.")
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        entries = serializer.validated_data["entries"]
+
+        to_update, errors = [], []
+        classrooms_terms_map = {}
+
+        for idx, entry in enumerate(entries):
+            record_id = entry.get("id")
+            try:
+                record = AssessmentRecord.objects.get(id=record_id)
+
+                if record.status == "approved":
+                    errors.append({
+                        "index": idx,
+                        "id": record_id,
+                        "error": "This assessment has been approved and cannot be updated.",
+                    })
+                    continue
+
+                update_serializer = AssessmentRecordUpdateSerializer(
+                    instance=record, data=entry, partial=True
+                )
+                update_serializer.is_valid(raise_exception=True)
+                updated_record = update_serializer.save()
+                to_update.append(updated_record)
+
+                classroom = get_student_active_classroom(record.student)
+                if record.period and classroom:
+                    classrooms_terms_map.setdefault(classroom, set()).add(
+                        record.period.term
+                    )
+
+            except AssessmentRecord.DoesNotExist:
+                errors.append({
+                    "index": idx,
+                    "id": record_id,
+                    "error": f"Assessment record '{record_id}' does not exist.",
+                })
+            except serializers.ValidationError as e:
+                errors.append({"index": idx, "id": record_id, "error": e.detail})
+            except Exception as e:
+                errors.append({"index": idx, "id": record_id, "error": str(e)})
+
+        # Recompute — stage derived from the record's period
+        for classroom, terms in classrooms_terms_map.items():
+            for term in terms:
+                # Find the period covering today within this term for stage resolution
+                today = timezone.now().date()
+                active_period = TermPeriod.objects.filter(
+                    term=term,
+                    start_date__lte=today,
+                    end_date__gte=today,
+                ).first()
+                stage = resolve_stage_from_period(active_period)
+                try:
+                    compute_all_subject_results(
+                        class_group=classroom, term=term, stage=stage
+                    )
+                    compute_term_summary(
+                        class_group=classroom, term=term, stage=stage
+                    )
+                except Exception as e:
+                    logger.exception(
+                        f"Result computation failed: classroom={classroom.id}, "
+                        f"term={term.id}, stage={stage}: {e}"
+                    )
+
+        return Response(
+            {
+                "updated_count": len(to_update),
+                "error_count": len(errors),
+                "errors": errors,
+                "data": AssessmentEntrySerializer(to_update, many=True).data,
+            },
+            status=status.HTTP_200_OK,
         )

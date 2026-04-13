@@ -61,7 +61,7 @@ class AcademicSessionAdmin(TenantAdminMixin, admin.ModelAdmin):
 
 @admin.register(TermPeriod)
 class TermPeriodAdmin(TenantAdminMixin, admin.ModelAdmin):
-    list_display = ("id", "name", "start_date", "end_date")
+    list_display = ("id", "name", "term", "is_active", "start_date", "end_date")
     search_fields = ("name", "school__name")
     ordering = ("-start_date",)
 
@@ -102,6 +102,7 @@ class AssessmentRecordAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "student",
+        "status",
         "classroom_subject",
         "assessment_type",
         "index",

@@ -27,6 +27,7 @@ from core.applications.users.api.schemas import SUBJECT_SCHEMA
 from core.applications.users.api.schemas import TeacherViewSetSchema
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicSessionSerializer,
+    auto_generate_periods,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicTermSerializer,
@@ -217,8 +218,8 @@ class AcademicTermViewSet(viewsets.ModelViewSet):
     Features:
     - Multi-tenant safe (scoped to authenticated user's school)
     - CRUD operations for terms
-    - Bulk creation of terms within a session
-    - Open / Close score entry
+    - Bulk creation of terms with auto-generated periods
+    - Open / Close score entry per term
     - Enforces single active term per session
     """
 
@@ -228,12 +229,19 @@ class AcademicTermViewSet(viewsets.ModelViewSet):
     # ---------------------------------------------------------
     # Queryset
     # ---------------------------------------------------------
+
     def get_queryset(self):
         """
-        Returns tenant-scoped queryset, optionally filtered by session_id.
+        Returns tenant-scoped queryset.
+        Optionally filtered by session_id query param.
         """
         school = self.request.user.school
-        queryset = AcademicTerm.objects.for_school(school).select_related("session").order_by("term_number")
+        queryset = (
+            AcademicTerm.objects.for_school(school)
+            .select_related("session")
+            .prefetch_related("periods")
+            .order_by("term_number")
+        )
 
         session_id = self.request.query_params.get("session_id")
         if session_id:
@@ -242,136 +250,130 @@ class AcademicTermViewSet(viewsets.ModelViewSet):
         return queryset
 
     # ---------------------------------------------------------
-    # CRUD Operations
+    # CRUD
     # ---------------------------------------------------------
+
     def perform_create(self, serializer):
-        """Delegate creation to serializer (handles tenant & activation logic)."""
+        """Delegate creation to serializer — handles tenant scoping, activation, and period generation."""
         serializer.save()
 
     def perform_destroy(self, instance):
-        """Soft-delete a term by deactivating it."""
+        """
+        Soft-delete: deactivate the term instead of hard deleting.
+        Prevents accidental loss of historical score data tied to the term.
+        """
         instance.is_active = False
         instance.save(update_fields=["is_active"])
 
     # ---------------------------------------------------------
-    # Bulk Create Terms
+    # Tenant check helper
     # ---------------------------------------------------------
+
+    def _check_tenant(self, term):
+        """Raise if term does not belong to the current user's school."""
+        if term.school != self.request.user.school:
+            raise PermissionDenied(_("Cross-school access denied."))
+
+    # ---------------------------------------------------------
+    # Bulk Create
+    # ---------------------------------------------------------
+
     @action(detail=False, methods=["post"], url_path="bulk-create")
     @transaction.atomic
     def bulk_create(self, request):
         """
-        Bulk create academic terms with tenant safety.
-        Automatically generates First Half / Second Half TermPeriods.
+        Bulk create up to 3 academic terms for a session in one request.
 
-        Steps:
-        1. Validate request payload.
-        2. Convert string dates to datetime.date objects.
-        3. Create AcademicTerm objects for the tenant school.
-        4. Automatically generate TermPeriods for each term.
+        Auto-generates four TermPeriods per term:
+        - First Half (teaching)
+        - Mid-Term Break (holiday)
+        - Second Half (teaching)
+        - Exams
+
+        Payload:
+            {
+                "session": <session_id>,
+                "terms": [
+                    {"term_number": 1, "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"},
+                    ...
+                ]
+            }
         """
-        serializer = BulkAcademicTermSerializer(data=request.data, context={"request": request})
+        serializer = BulkAcademicTermSerializer(
+            data=request.data, context={"request": request}
+        )
         serializer.is_valid(raise_exception=True)
 
         school = request.user.school
         session = serializer.validated_data["session"]
         terms_data = serializer.validated_data["terms"]
 
-        term_objects = []
-
-        # -----------------------
-        # Build AcademicTerm objects
-        # -----------------------
-        for term_data in terms_data:
-            term_number = term_data["term_number"]
-
-            # Convert string dates to datetime.date
-            try:
-                start_date = datetime.strptime(term_data["start_date"], "%Y-%m-%d").date()
-                end_date = datetime.strptime(term_data["end_date"], "%Y-%m-%d").date()
-            except ValueError:
-                raise serializers.ValidationError(_("Invalid date format. Use YYYY-MM-DD."))
-
-            if start_date > end_date:
-                raise serializers.ValidationError(_("start_date cannot be after end_date."))
-
-            term_type = term_data.get("term_type") or AcademicTermSerializer()._determine_term_type(term_number)
-
-            term_objects.append(
-                AcademicTerm(
-                    school=school,
-                    session=session,
-                    term_number=term_number,
-                    start_date=start_date,
-                    end_date=end_date,
-                    is_active=term_data.get("is_active", False),
-                    term_type=term_type,
-                )
+        # Deactivate existing terms in the session if any incoming term is active
+        if any(t.get("is_active") for t in terms_data):
+            AcademicTerm.objects.for_school(school).filter(session=session).update(
+                is_active=False
             )
 
-        # Bulk create terms
+        # name is a @property on AcademicTerm derived from term_number — never passed to constructor
+        term_objects = [
+            AcademicTerm(
+                school=school,
+                session=session,
+                term_number=term_data["term_number"],
+                term_type=term_data["term_type"],
+                start_date=term_data["start_date"],
+                end_date=term_data["end_date"],
+                is_active=term_data.get("is_active", False),
+            )
+            for term_data in terms_data
+        ]
+
         created_terms = AcademicTerm.objects.bulk_create(term_objects)
 
-        # -----------------------
-        # Automatically generate TermPeriods
-        # -----------------------
         period_objects = []
         for term in created_terms:
-            start_date = term.start_date
-            end_date = term.end_date
-
-            # Midpoint calculation
-            mid_date = start_date + (end_date - start_date) // 2
-
-            period_objects.extend([
-                TermPeriod(
-                    school=school,
-                    term=term,
-                    name="First Half",
-                    period_type=TermPeriod.PeriodType.HALF_TERM,
-                    start_date=start_date,
-                    end_date=mid_date,
-                ),
-                TermPeriod(
-                    school=school,
-                    term=term,
-                    name="Second Half",
-                    period_type=TermPeriod.PeriodType.HALF_TERM,
-                    start_date=mid_date + timedelta(days=1),
-                    end_date=end_date,
-                )
-            ])
+            period_objects.extend(auto_generate_periods(school, term))
 
         TermPeriod.objects.bulk_create(period_objects)
 
         return Response(
             {"detail": f"{len(created_terms)} terms created successfully."},
-            status=status.HTTP_201_CREATED
+            status=status.HTTP_201_CREATED,
         )
 
     # ---------------------------------------------------------
     # Open / Close Score Entry
     # ---------------------------------------------------------
-    def _check_tenant(self, term):
-        """Helper to validate term belongs to current user's school."""
-        if term.school != self.request.user.school:
-            raise serializers.ValidationError(_("Cross-school access denied."))
 
     @action(detail=True, methods=["post"], url_path="open-score-entry")
     @transaction.atomic
     def open_score_entry(self, request, pk=None):
-        """Open a term for score entry, deactivating other active terms in the session."""
+        """
+        Open a term for score entry.
+
+        - Validates session is active.
+        - Deactivates all other active terms in the same session.
+        - Activates this term.
+        """
         term = self.get_object()
         self._check_tenant(term)
 
         if not term.session.is_active:
-            return Response({"detail": _("Cannot open score entry for an inactive session.")},
-                            status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": _("Cannot open score entry under an inactive session.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # Deactivate other active terms
-        AcademicTerm.objects.for_school(request.user.school) \
-            .filter(session=term.session, is_active=True) \
-            .exclude(pk=term.pk) \
-            .update(is_active=False)
+        if term.is_active:
+            return Response(
+                {"detail": _("This term is already open for score entry.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Deactivate all sibling terms in the session
+        AcademicTerm.objects.for_school(request.user.school).filter(
+            session=term.session
+        ).exclude(pk=term.pk).update(is_active=False)
 
         term.is_active = True
         term.save(update_fields=["is_active"])
@@ -380,21 +382,26 @@ class AcademicTermViewSet(viewsets.ModelViewSet):
             {
                 "detail": f"{term.name} is now open for score entry.",
                 "term_id": term.id,
-                "is_active": True
+                "is_active": True,
             },
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
 
     @action(detail=True, methods=["post"], url_path="close-score-entry")
     @transaction.atomic
     def close_score_entry(self, request, pk=None):
-        """Close score entry for a term."""
+        """
+        Close score entry for a term.
+        Prevents further score submissions without deleting existing records.
+        """
         term = self.get_object()
         self._check_tenant(term)
 
         if not term.is_active:
-            return Response({"detail": _("This term is already closed.")},
-                            status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": _("This term is already closed for score entry.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         term.is_active = False
         term.save(update_fields=["is_active"])
@@ -403,9 +410,9 @@ class AcademicTermViewSet(viewsets.ModelViewSet):
             {
                 "detail": f"{term.name} is now closed for score entry.",
                 "term_id": term.id,
-                "is_active": False
+                "is_active": False,
             },
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
 # ============================================================================
 # Subject ViewSet

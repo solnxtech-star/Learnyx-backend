@@ -10,6 +10,7 @@ from core.applications.users.managers import TenantManager
 from core.helper.enums import AcademicClass
 from core.helper.enums import AcademicTrack
 from core.helper.enums import DayOfWeek
+from core.helper.enums import ReviewStatus
 from core.helper.enums import UserRole
 from core.helper.models import TenantAwareModel
 from core.helper.models import TimeStampedModel
@@ -114,6 +115,7 @@ class TermPeriod(TenantAwareModel):
         max_length=20,
         choices=PeriodType.choices
     )
+    is_active = models.BooleanField(default=False)
 
     start_date = models.DateField()
     end_date = models.DateField()
@@ -192,6 +194,12 @@ class AssessmentType(TimeStampedModel):
     order = models.PositiveIntegerField(
         default=0, help_text=_("Display order in reports")
     )
+    period_type = models.CharField(
+        max_length=20,
+        choices=TermPeriod.PeriodType.choices,
+        null=True,
+        blank=True
+    )
 
     class Meta(auto_prefetch.Model.Meta):
         ordering = ["policy", "order", "name"]
@@ -244,6 +252,13 @@ class AssessmentRecord(TimeStampedModel):
     assessment_type = auto_prefetch.ForeignKey(
         AssessmentType, on_delete=models.CASCADE, related_name="records"
     )
+    status  = models.CharField(
+        max_length=20,
+        choices=ReviewStatus.choices,
+        default=ReviewStatus.PENDING,
+        db_index=True,
+    )
+    remarks = models.TextField(blank=True, default="")
     index = models.PositiveIntegerField(help_text=_("Test/Exam number e.g. 1 or 2"))
     score = models.FloatField(null=True, blank=True)
     date_taken = models.DateField(null=True, blank=True)
@@ -281,6 +296,7 @@ class AssessmentRecord(TimeStampedModel):
         if self.score is None or self.assessment_type.max_score == 0:
             return 0
         return (self.score / self.assessment_type.max_score) * 100
+
 
 
 class Subject(TenantAwareModel):

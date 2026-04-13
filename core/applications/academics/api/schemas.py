@@ -701,72 +701,114 @@ teachers_dashboard = extend_schema_view(
     # =====================================================
     # STEP 3C — Enter Single Assessment (NEW)
     # =====================================================
-    enter_assessment=extend_schema(
-        summary="Enter a single assessment record",
-        description=(
-            "STEP 3C: Create a single assessment entry for a student.\n\n"
-            "This endpoint allows a teacher to submit one assessment score "
-            "for a specific student and subject.\n\n"
-            "**Flow:**\n"
-            "1. Teacher selects classroom.\n"
-            "2. Teacher selects subject.\n"
-            "3. Teacher selects student.\n"
-            "4. Teacher selects assessment type (CA, Exam, etc).\n"
-            "5. Teacher submits score.\n\n"
-            "**Server-side validations include:**\n"
-            "- Teacher must be assigned to the classroom.\n"
-            "- Teacher must be assigned to teach the subject.\n"
-            "- Student must be enrolled in subject.\n"
-            "- Term must be active.\n"
-            "- Score must not exceed allowed limits.\n"
-            "- Assessment count policy enforcement.\n\n"
-            "**Side Effect:**\n"
-            "Subject results are automatically recomputed after successful entry."
-        ),
-        request=AssessmentEntryCreateSerializer,
-        responses={
-            201: AssessmentEntrySerializer,
-            400: OpenApiResponse(description="Validation error"),
-            403: OpenApiResponse(description="Permission denied"),
-        },
-        tags=["Teacher Dashboard"],
-    ),
+    # enter_assessment=extend_schema(
+    #     summary="Enter a single assessment record",
+    #     description=(
+    #         "STEP 3C: Create a single assessment entry for a student.\n\n"
+    #         "This endpoint allows a teacher to submit one assessment score "
+    #         "for a specific student and subject.\n\n"
+    #         "**Flow:**\n"
+    #         "1. Teacher selects classroom.\n"
+    #         "2. Teacher selects subject.\n"
+    #         "3. Teacher selects student.\n"
+    #         "4. Teacher selects assessment type (CA, Exam, etc).\n"
+    #         "5. Teacher submits score.\n\n"
+    #         "**Server-side validations include:**\n"
+    #         "- Teacher must be assigned to the classroom.\n"
+    #         "- Teacher must be assigned to teach the subject.\n"
+    #         "- Student must be enrolled in subject.\n"
+    #         "- Term must be active.\n"
+    #         "- Score must not exceed allowed limits.\n"
+    #         "- Assessment count policy enforcement.\n\n"
+    #         "**Side Effect:**\n"
+    #         "Subject results are automatically recomputed after successful entry."
+    #     ),
+    #     request=AssessmentEntryCreateSerializer,
+    #     responses={
+    #         201: AssessmentEntrySerializer,
+    #         400: OpenApiResponse(description="Validation error"),
+    #         403: OpenApiResponse(description="Permission denied"),
+    #     },
+    #     tags=["Teacher Dashboard"],
+    # ),
 
-    # =====================================================
-    # STEP 3D — Enter Bulk Assessments (NEW)
-    # =====================================================
-    enter_bulk_assessments=extend_schema(
-        summary="Enter multiple assessment records in bulk",
+    # # =====================================================
+    # # STEP 3D — Enter Bulk Assessments (NEW)
+    # # =====================================================
+    # enter_bulk_assessments=extend_schema(
+    #     summary="Enter multiple assessment records in bulk",
+    #     description=(
+    #         "STEP 3D: Create multiple assessment entries in one request.\n\n"
+    #         "This endpoint is optimized for bulk score entry "
+    #         "(e.g., entering CA scores for an entire class).\n\n"
+    #         "**Request structure:**\n"
+    #         "- `subject_id`: Common subject for all entries.\n"
+    #         "- `entries`: List of student assessment payloads.\n\n"
+    #         "**Each entry must contain:**\n"
+    #         "- `student_id`\n"
+    #         "- `assessment_type_id`\n"
+    #         "- `score`\n\n"
+    #         "**Server-side validations include:**\n"
+    #         "- Teacher classroom authorization per student.\n"
+    #         "- Subject assignment validation.\n"
+    #         "- Enrollment verification.\n"
+    #         "- Term activity check.\n"
+    #         "- Score limit enforcement.\n"
+    #         "- Cumulative policy enforcement.\n\n"
+    #         "**Transaction behavior:**\n"
+    #         "- All entries are processed atomically.\n"
+    #         "- If one entry fails, the entire request is rolled back.\n\n"
+    #         "**Side Effect:**\n"
+    #         "Subject results are recomputed for each affected student."
+    #     ),
+    #     request=BulkAssessmentEntrySerializer,
+    #     responses={
+    #         201: AssessmentEntrySerializer(many=True),
+    #         400: OpenApiResponse(description="Validation error"),
+    #         403: OpenApiResponse(description="Permission denied"),
+    #     },
+    #     tags=["Teacher Dashboard"],
+    # ),
+)
+
+
+accessment_record_schema = extend_schema_view(
+    create=extend_schema(
+        summary="Bulk Assessment Entry",
         description=(
-            "STEP 3D: Create multiple assessment entries in one request.\n\n"
-            "This endpoint is optimized for bulk score entry "
-            "(e.g., entering CA scores for an entire class).\n\n"
-            "**Request structure:**\n"
-            "- `subject_id`: Common subject for all entries.\n"
-            "- `entries`: List of student assessment payloads.\n\n"
-            "**Each entry must contain:**\n"
-            "- `student_id`\n"
-            "- `assessment_type_id`\n"
-            "- `score`\n\n"
-            "**Server-side validations include:**\n"
-            "- Teacher classroom authorization per student.\n"
-            "- Subject assignment validation.\n"
-            "- Enrollment verification.\n"
-            "- Term activity check.\n"
-            "- Score limit enforcement.\n"
-            "- Cumulative policy enforcement.\n\n"
-            "**Transaction behavior:**\n"
-            "- All entries are processed atomically.\n"
-            "- If one entry fails, the entire request is rolled back.\n\n"
-            "**Side Effect:**\n"
-            "Subject results are recomputed for each affected student."
+            "Create multiple assessment records in bulk. "
+            "Validates student enrollment, teacher assignment, and assessment score. "
+            "Computes subject results and term summaries after saving."
         ),
         request=BulkAssessmentEntrySerializer,
-        responses={
-            201: AssessmentEntrySerializer(many=True),
-            400: OpenApiResponse(description="Validation error"),
-            403: OpenApiResponse(description="Permission denied"),
-        },
-        tags=["Teacher Dashboard"],
+        responses={201: AssessmentEntrySerializer(many=True)},
+    ),
+    list=extend_schema(
+        summary="List Assessment Records",
+        description="Retrieve assessment records. Can filter by student_id, classroom_id, subject_id, or term_id.",
+        parameters=[
+            OpenApiParameter(name="student_id", description="Filter by student ID", required=False, type=int),
+            OpenApiParameter(name="classroom_id", description="Filter by classroom ID", required=False, type=int),
+            OpenApiParameter(name="subject_id", description="Filter by subject ID", required=False, type=int),
+            OpenApiParameter(name="term_id", description="Filter by term ID", required=False, type=int),
+        ],
+        responses={200: AssessmentEntrySerializer(many=True)},
+    ),
+    retrieve=extend_schema(
+        summary="Retrieve Assessment Record",
+        description="Retrieve a single assessment record by ID.",
+        responses={200: AssessmentEntrySerializer},
+    ),
+    update=extend_schema(
+        summary="Update Assessment Record",
+        description="Update an existing assessment record. Validates score and enrollment.",
+        request=AssessmentEntryCreateSerializer,
+        responses={200: AssessmentEntrySerializer},
+    ),
+    partial_update=extend_schema(
+        summary="Partial Update Assessment Record",
+        description="Update one or more fields of an assessment record.",
+        request=AssessmentEntryCreateSerializer,
+        responses={200: AssessmentEntrySerializer},
     ),
 )

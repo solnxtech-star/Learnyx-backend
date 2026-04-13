@@ -8,6 +8,7 @@ from django.utils.translation import gettext_lazy as _
 
 from core.applications.academics.models import AcademicTerm
 from core.applications.academics.models import AssessmentRecord
+from core.helper.enums import Stage
 from core.helper.models import TenantAwareModel
 from core.helper.models import TimeStampedModel
 
@@ -16,77 +17,133 @@ from core.helper.models import TimeStampedModel
 
 class SubjectResult(TimeStampedModel):
     """
-    Final subject performance for a student per term.
+    Subject performance for a student per term, per assessment stage.
+    A student has one HALF_TERM result and one END_OF_TERM result
+    for the same subject in the same term — they never overwrite each other.
     """
 
-    student = auto_prefetch.ForeignKey("users.StudentProfile", on_delete=models.CASCADE)
+    class Stage(models.TextChoices):
+        HALF_TERM = "HALF_TERM", _("Half Term")
+        END_OF_TERM = "END_OF_TERM", _("End of Term")
+
+    student = auto_prefetch.ForeignKey(
+        "users.StudentProfile", on_delete=models.CASCADE, related_name="subject_results"
+    )
     classroom_subject = auto_prefetch.ForeignKey(
-        "academics.Subject", on_delete=models.CASCADE
+        "academics.Subject", on_delete=models.CASCADE, related_name="subject_results"
     )
-    term = auto_prefetch.ForeignKey(AcademicTerm, on_delete=models.CASCADE)
-
-    total_ca = models.FloatField(default=0)
-    exam_score = models.FloatField(default=0)
-    half_term_score = models.FloatField(
-        default=0, help_text=_("Score for half-term exams")
+    term = auto_prefetch.ForeignKey(
+        AcademicTerm, on_delete=models.CASCADE, related_name="subject_results"
     )
-    total_score = models.FloatField(default=0)
-    average_score = models.FloatField(
-        default=0, help_text=_("Average score for the subject")
+    stage = models.CharField(
+        max_length=20,
+        choices=Stage.choices,
+        default=Stage.END_OF_TERM,
+        help_text=_("Assessment stage this result belongs to"),
     )
 
-    grade = models.CharField(
-        max_length=3, null=True, blank=True
-    )  # Increased to 3 for A'
+    total_ca = models.DecimalField(
+        max_digits=6, decimal_places=2, default=0,
+        help_text=_("Aggregated continuous assessment score")
+    )
+    exam_score = models.DecimalField(
+        max_digits=6, decimal_places=2, default=0,
+        help_text=_("End of term exam score")
+    )
+    half_term_score = models.DecimalField(
+        max_digits=6, decimal_places=2, default=0,
+        help_text=_("Score at half term checkpoint")
+    )
+    total_score = models.DecimalField(
+        max_digits=6, decimal_places=2, default=0,
+        help_text=_("Final weighted total score out of 100")
+    )
+    average_score = models.DecimalField(
+        max_digits=6, decimal_places=2, default=0,
+        help_text=_("Average across assessment categories")
+    )
+
+    grade = models.CharField(max_length=3, null=True, blank=True)
     grade_point = models.DecimalField(
         max_digits=3, decimal_places=1, null=True, blank=True
     )
     comment = models.CharField(max_length=255, null=True, blank=True)
+    is_published = models.BooleanField(default=False)
 
     class Meta(auto_prefetch.Model.Meta):
-        unique_together = ("student", "classroom_subject", "term")
+        unique_together = ("student", "classroom_subject", "term", "stage")
         verbose_name = _("Subject Result")
         verbose_name_plural = _("Subject Results")
+        ordering = ["term", "stage"]
 
-    def calculate_total_score(self):
-        """Calculate total score based on assessment records and policy"""
-        from django.db.models import Sum, Avg
+    def __str__(self):
+        return f"{self.student} | {self.classroom_subject} | {self.term} | {self.get_stage_display()}"
 
-        # Get all assessment records for this student, subject, and term
-        records = AssessmentRecord.objects.filter(
-            student=self.student,
-            classroom_subject=self.classroom_subject,
-            assessment_type__policy__term=self.term,
-        ).select_related("assessment_type")
 
-        total_score = 0
+class TermReportSummary(TimeStampedModel):
+    """
+    Aggregates performance across all subjects for a student in a term.
+    Scoped per stage so half-term and end-of-term summaries coexist.
+    Class position is computed within the class group at each stage.
+    """
 
-        for record in records:
-            if record.score is not None:
-                # Calculate weighted score
-                percentage = (record.score / record.assessment_type.max_score) * 100
-                weighted_score = (percentage * record.assessment_type.weight) / 100
-                total_score += weighted_score
+    student = auto_prefetch.ForeignKey(
+        "users.StudentProfile", on_delete=models.CASCADE, related_name="term_summaries"
+    )
+    term = auto_prefetch.ForeignKey(
+        AcademicTerm, on_delete=models.CASCADE, related_name="term_summaries"
+    )
+    class_group = auto_prefetch.ForeignKey(
+        "academics.ClassRoom", on_delete=models.CASCADE, related_name="term_summaries",
+        null=True,
+        blank=True,
+    )
+    stage = models.CharField(
+        max_length=20,
+        choices=SubjectResult.Stage.choices,
+        default=SubjectResult.Stage.END_OF_TERM,
+        help_text=_("Assessment stage this summary belongs to"),
+    )
 
-        return min(total_score, 100)  # Cap at 100%
+    total_score = models.DecimalField(
+        max_digits=8, decimal_places=2, default=0,
+        help_text=_("Sum of total_score across all subjects")
+    )
+    average_score = models.DecimalField(
+        max_digits=6, decimal_places=2, default=0,
+        help_text=_("Average total_score across all subjects")
+    )
+    total_points = models.DecimalField(
+        max_digits=6, decimal_places=2, default=0,
+        help_text=_("Sum of grade_points across all subjects")
+    )
+    gpa = models.DecimalField(
+        max_digits=4, decimal_places=2, null=True, blank=True,
+        help_text=_("Grade point average for the term")
+    )
+    target_gpa = models.DecimalField(
+        max_digits=4, decimal_places=2, null=True, blank=True
+    )
+    class_position = models.PositiveIntegerField(null=True, blank=True)
+    attendance_percentage = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True
+    )
 
-    def save(self, *args, **kwargs):
-        # Auto-calculate total score if not set
-        if not self.total_score:
-            self.total_score = self.calculate_total_score()
+    conduct_rating = models.CharField(max_length=20, null=True, blank=True)
+    principal_comment = models.TextField(null=True, blank=True)
+    form_teacher_comment = models.TextField(null=True, blank=True)
 
-        # Calculate average (for half-term reports)
-        ca_count = AssessmentRecord.objects.filter(
-            student=self.student,
-            classroom_subject=self.classroom_subject,
-            assessment_type__policy__term=self.term,
-            assessment_type__category="CA",
-        ).count()
+    class Meta(auto_prefetch.Model.Meta):
+        unique_together = ("student", "term", "stage", "class_group")
+        verbose_name = _("Term Report Summary")
+        verbose_name_plural = _("Term Report Summaries")
+        ordering = ["term", "stage", "class_position"]
 
-        if ca_count > 0:
-            self.average_score = self.total_ca / ca_count if self.total_ca else 0
+    def __str__(self):
+        return f"{self.student} | {self.term} | {self.get_stage_display()} | {self.class_group}"
 
-        super().save(*args, **kwargs)
+
+
 
 
 class TeacherComment(TimeStampedModel):
@@ -146,61 +203,6 @@ class TargetGrade(TimeStampedModel):
 
     def __str__(self):
         return f"{self.student} - {self.classroom_subject}: {self.current_grade} → {self.target_grade}"
-
-
-class TermReportSummary(TimeStampedModel):
-    """
-    Aggregates performance across all subjects in a term.
-    """
-
-    student = auto_prefetch.ForeignKey("users.StudentProfile", on_delete=models.CASCADE)
-    term = auto_prefetch.ForeignKey(AcademicTerm, on_delete=models.CASCADE)
-    class_group = auto_prefetch.ForeignKey(
-        "academics.ClassRoom", on_delete=models.CASCADE, null=True, blank=True
-    )
-
-    total_score = models.FloatField(default=0)
-    average_score = models.FloatField(default=0)
-    total_points = models.FloatField(default=0)
-    gpa = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True)
-    target_gpa = models.DecimalField(
-        max_digits=3, decimal_places=2, null=True, blank=True
-    )
-    class_position = models.PositiveIntegerField(null=True, blank=True)
-    attendance_percentage = models.DecimalField(
-        max_digits=5, decimal_places=2, null=True, blank=True
-    )
-    conduct_rating = models.CharField(max_length=20, null=True, blank=True)
-    principal_comment = models.TextField(null=True, blank=True)
-    form_teacher_comment = models.TextField(null=True, blank=True)
-
-    class Meta(auto_prefetch.Model.Meta):
-        unique_together = ("student", "term")
-        verbose_name = _("Term Report Summary")
-        verbose_name_plural = _("Term Report Summaries")
-
-    def calculate_gpa(self):
-        """Calculate GPA based on all subject results"""
-        subject_results = SubjectResult.objects.filter(
-            student=self.student, term=self.term
-        )
-        total_points = sum([sr.grade_point or 0 for sr in subject_results])
-        count = subject_results.count()
-        return total_points / count if count > 0 else 0
-
-    def save(self, *args, **kwargs):
-        # Auto-calculate GPA if not set
-        if not self.gpa:
-            self.gpa = self.calculate_gpa()
-
-        # Calculate total points
-        subject_results = SubjectResult.objects.filter(
-            student=self.student, term=self.term
-        )
-        self.total_points = sum([sr.grade_point or 0 for sr in subject_results])
-
-        super().save(*args, **kwargs)
-
 
 
 
