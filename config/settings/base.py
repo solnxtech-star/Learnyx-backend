@@ -1,6 +1,6 @@
 # ruff: noqa: ERA001, E501
 """Base settings to build other settings files upon."""
-
+import os
 import ssl
 from pathlib import Path
 
@@ -53,6 +53,23 @@ LOCALE_PATHS = [str(BASE_DIR / "locale")]
 # https://docs.djangoproject.com/en/dev/ref/settings/#databases
 DATABASES = {"default": env.db("DATABASE_URL")}
 DATABASES["default"]["ATOMIC_REQUESTS"] = True
+# Hybrid tenancy — dynamically load isolated tenant databases
+# Convention: TENANT_DB_<ALIAS>=postgres://user:pass@host/dbname
+# Example:
+#   TENANT_DB_GREENFIELD=postgres://user:pass@host/tenant_greenfield
+#   TENANT_DB_BROOKSIDE=postgres://user:pass@host/tenant_brookside
+#
+# These are only present for Premium/Isolated tier schools.
+# Standard/Shared tier schools use the default database above.
+for key, value in os.environ.items():
+    if key.startswith("TENANT_DB_"):
+        # TENANT_DB_GREENFIELD → school_greenfield
+        alias = f"school_{key[len('TENANT_DB_'):].lower()}"
+        DATABASES[alias] = env.db_url(value)
+        DATABASES[alias]["ATOMIC_REQUESTS"] = True  # consistent with default
+        DATABASES[alias]["CONN_MAX_AGE"] = 60
+# Router
+DATABASE_ROUTERS = ["core.db.routers.TenantDatabaseRouter"]
 # https://docs.djangoproject.com/en/stable/ref/settings/#std:setting-DEFAULT_AUTO_FIELD
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

@@ -21,28 +21,80 @@ from core.helper.media import MediaHelper
 from core.helper.models import TenantAwareModel
 from core.helper.models import TimeStampedModel
 
+from .managers import ProfileTenantManager
 from .managers import SchoolManager
 from .managers import TenantManager
 from .managers import UserManager
 
 
-# --------------------------
-# Core School Model
-# --------------------------
 class School(models.Model):
     """Represents a school tenant in the SaaS platform."""
+
+    class DatabaseTier(models.TextChoices):
+        SHARED   = "shared",   _("Shared Database")
+        ISOLATED = "isolated", _("Isolated Database")
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=255)
-    slug = models.SlugField(unique=True, db_index=True)
+    name = models.CharField(max_length=255, help_text=_("Official name of the school"))
+    slug = models.SlugField(
+        unique=True, db_index=True,
+        help_text=_("URL-friendly identifier auto-generated from the school name")
+    )
     school_code = models.CharField(
         max_length=12, unique=True, editable=False, db_index=True,
         help_text=_("Unique auto-generated code used for user onboarding"),
     )
-    is_active = models.BooleanField(default=True)
-    subscription_plan = models.CharField(max_length=50, blank=True, null=True)
-    subscription_expiry = models.DateField(blank=True, null=True)
-    max_students = models.PositiveIntegerField(default=1000)
-    address = models.CharField(max_length=255, blank=True, null=True)
+    db_tier = models.CharField(
+        _("Database Tier"),
+        max_length=20,
+        choices=DatabaseTier.choices,
+        default=DatabaseTier.SHARED,
+        help_text=_(
+            "SHARED: school data lives in the shared default database. "
+            "ISOLATED: school data lives in its own dedicated database."
+        ),
+    )
+    db_alias = models.CharField(
+        _("Database Alias"),
+        max_length=100,
+        default="default",
+        editable=False,
+        db_index=True,
+        help_text=_(
+            "The Django DATABASES key for this tenant. "
+            "'default' for shared-plan schools. "
+            "Auto-set to 'school_<slug>' when promoted to isolated tier."
+        ),
+    )
+    is_active = models.BooleanField(
+        default=True, help_text=_("Indicates if the school is currently active")
+    )
+    subscription_plan = models.CharField(
+        max_length=50, blank=True, null=True,
+        help_text=_("Name of the subscription plan the school is on")
+    )
+    subscription_expiry = models.DateField(
+        blank=True, null=True,
+        help_text=_("Date when the school's subscription expires")
+    )
+    custom_domain = models.CharField(
+        _("Custom Domain"),
+        max_length=253,
+        blank=True,
+        null=True,
+        unique=True,
+        help_text=_(
+            "Optional fully-qualified custom domain for this school. "
+            "e.g. portal.greenfield.edu.ng"
+        ),
+    )
+    max_students = models.PositiveIntegerField(
+        default=1000, help_text=_("Maximum number of students the school can accommodate"
+    ))
+    address = models.CharField(
+        max_length=255, blank=True, null=True,
+        help_text=_("Physical address of the school")
+    )
     phone = models.CharField(max_length=20, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -78,6 +130,19 @@ class School(models.Model):
             raise ValidationError(_("Subscription expiry cannot be in the past."))
 
         super().save(*args, **kwargs)
+
+    @property
+    def is_isolated(self) -> bool:
+        """True if this school has a dedicated isolated database."""
+        return self.db_tier == self.DatabaseTier.ISOLATED
+
+    @property
+    def effective_db_alias(self) -> str:
+        """
+        The actual database alias to use for this school's data.
+        Always 'default' for shared-tier schools.
+        """
+        return self.db_alias if self.is_isolated else "default"
 
 
 # --------------------------
@@ -173,7 +238,7 @@ class AdminProfile(BaseProfile):
     position = models.CharField(max_length=100, blank=True, null=True)
     school_name = models.CharField(max_length=255, blank=True, null=True)
 
-    objects = TenantManager()
+    objects = ProfileTenantManager()
 
     def __str__(self):
         return f"Admin ({self.admin_type}): {self.user.name or self.user.email}"
@@ -194,7 +259,7 @@ class TeacherProfile(BaseProfile):
     specialization = models.CharField(max_length=100, blank=True, null=True)
     department = models.CharField(max_length=100, blank=True, null=True)
 
-    objects = TenantManager()
+    objects = ProfileTenantManager()
 
     def __str__(self):
         return f"Teacher: {self.user.name or self.user.email}"
@@ -224,7 +289,7 @@ class StudentProfile(BaseProfile):
     guardian_phone = models.CharField(max_length=20, blank=True, null=True)
     address = models.CharField(max_length=255, blank=True, null=True)
 
-    objects = TenantManager()
+    objects = ProfileTenantManager()
 
     def save(self, *args, **kwargs):
         if not self.student_id:
@@ -313,6 +378,7 @@ class StudentEnrollment(TenantAwareModel):
     )
     is_active = models.BooleanField(default=True)
 
+    objects = TenantManager()
 
     class Meta(auto_prefetch.Model.Meta):
         constraints = [

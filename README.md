@@ -95,3 +95,36 @@ The following details how to deploy this application.
 See detailed [cookiecutter-django Docker documentation](https://cookiecutter-django.readthedocs.io/en/latest/3-deployment/deployment-with-docker.html).
 
 use uv lock to generate another loc file after updating the dependencies
+
+
+# Standard — runs master migrations on default
+# runs tenant migrations on default (covers shared schools)
+python manage.py migrate
+
+# When a new isolated school is provisioned
+# runs only tenant migrations on that school's database
+python manage.py migrate --database=school_greenfield
+
+# Check what migrations are pending on an isolated DB
+python manage.py showmigrations --database=school_greenfield
+
+<!-- How it all connects together  -->
+.env file
+TENANT_DB_GREENFIELD=postgres://...
+        │
+        ▼
+base.py loop
+  alias = "school_greenfield"
+  DATABASES["school_greenfield"] = env.db_url(value)
+        │
+        ▼
+School.db_alias = "school_greenfield"  (set by provisioning service)
+        │
+        ▼
+Middleware sets thread-local db_alias = "school_greenfield"
+        │
+        ▼
+Router reads thread-local → returns "school_greenfield"
+        │
+        ▼
+ORM query runs on correct isolated database ✅

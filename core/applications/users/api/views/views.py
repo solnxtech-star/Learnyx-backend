@@ -6,7 +6,6 @@ from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth import user_logged_out
 from django.utils.module_loading import import_string
 from django.utils.timezone import now
-from core.applications.academics.models import StudentClassAssignment
 from djoser import signals
 from djoser import utils
 from djoser.compat import get_user_email
@@ -31,17 +30,22 @@ from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.settings import api_settings
 
+from core.applications.academics.models import StudentClassAssignment
 from core.applications.users.api.schemas import user_schema
 from core.applications.users.api.serializers.serializers import (
     CustomAdminCreateSerializer,
-    StudentOnboardingSerializer,
-    StudentPhotoUploadSerializer,
 )
 from core.applications.users.api.serializers.serializers import (
     CustomTeacherCreateSerializer,
 )
 from core.applications.users.api.serializers.serializers import (
     CustomUserCreateSerializer,
+)
+from core.applications.users.api.serializers.serializers import (
+    StudentOnboardingSerializer,
+)
+from core.applications.users.api.serializers.serializers import (
+    StudentPhotoUploadSerializer,
 )
 from core.applications.users.api.serializers.serializers import UserSerializer
 from core.applications.users.models import User

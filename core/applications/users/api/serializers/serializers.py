@@ -851,7 +851,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     raise PermissionDenied(
                         msg,
                     )
-                if not api_settings.USER_AUTHENTICATION_RULE(self.user):
+                if not api_settings.USER_AUTHENTICATION_RULE(user):
                     raise AuthenticationFailed(
                         detail="Login failed. Please check your email and password and try again.",  # noqa: E501
                     )
@@ -864,6 +864,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         data["registration_complete"] = None
         data["setup_info"] = UserSerializer.Info(instance=self.user).data
         data["registration_complete"] = all([self.user.is_active])
+        data["is_verified"] = self.user.is_verified
         if api_settings.UPDATE_LAST_LOGIN:
             update_last_login(None, self.user)
         if not self.user.is_superuser:
