@@ -1,5 +1,6 @@
 # academics/admin.py
 from django.contrib import admin
+from django.utils.translation import gettext_lazy as _
 
 from core.applications.academics.models import AcademicSession
 from core.applications.academics.models import AcademicTerm
@@ -172,15 +173,82 @@ class TimetableAdmin(admin.ModelAdmin):
         "id",
         "name",
         "school",
-        "academic_year",
+        "class_room",
+        "academic_session",  # Changed from academic_year
         "term",
+        "timetable_type",
         "is_active",
         "start_date",
         "end_date",
     )
-    list_filter = ("school", "academic_year", "term", "is_active")
-    search_fields = ("name", "academic_year", "term")
-    filter_horizontal = ("schedules",)
+
+    list_filter = (
+        "school",
+        "academic_session",  # Changed from academic_year
+        "term",
+        "timetable_type",
+        "is_active"
+    )
+
+    search_fields = (
+        "name",
+        "school__name",  # Search by school name
+        "class_room__name",  # Search by classroom name
+        "academic_session__name",  # Search by session name
+        "term__name"  # Search by term name
+    )
+
+    # Remove filter_horizontal since 'schedules' doesn't exist
+    # If you have related fields that need horizontal filter, add them here
+
+    # Add these for better UX
+    raw_id_fields = ("school", "class_room", "academic_session", "term")
+    list_select_related = ("school", "class_room", "academic_session", "term")
+    date_hierarchy = "start_date"
+
+    # Add actions
+    actions = ["activate_timetables", "deactivate_timetables"]
+
+    @admin.action(
+        description=_("Activate selected timetables")
+    )
+    def activate_timetables(self, request, queryset):
+        queryset.update(is_active=True)
+        self.message_user(request, _("Selected timetables have been activated."))
+
+    @admin.action(
+        description=_("Deactivate selected timetables")
+    )
+    def deactivate_timetables(self, request, queryset):
+        queryset.update(is_active=False)
+        self.message_user(request, _("Selected timetables have been deactivated."))
+
+    # Customize form layout
+    fieldsets = (
+        (_("Basic Information"), {
+            "fields": (
+                "school",
+                "class_room",
+                "name",
+                "timetable_type"
+            )
+        }),
+        (_("Academic Period"), {
+            "fields": (
+                "academic_session",
+                "term"
+            )
+        }),
+        (_("Date Range"), {
+            "fields": (
+                "start_date",
+                "end_date"
+            )
+        }),
+        (_("Status"), {
+            "fields": ("is_active",)
+        }),
+    )
 
 
 @admin.register(StudentSubjectEnrollment)

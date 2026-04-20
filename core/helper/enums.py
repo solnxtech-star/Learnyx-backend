@@ -75,3 +75,8 @@ class ReviewStatus(models.TextChoices):
 class Stage(models.TextChoices):
         HALF_TERM = "HALF_TERM", _("Half Term")
         END_OF_TERM = "END_OF_TERM", _("End of Term")
+
+
+class TimetableType(models.TextChoices):
+        CLASS = "CLASS", "Class Timetable"
+        EXAM = "EXAM", "Exam Timetable"

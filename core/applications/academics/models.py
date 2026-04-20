@@ -7,7 +7,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from core.applications.users.managers import TenantManager
-from core.helper.enums import AcademicClass
+from core.helper.enums import AcademicClass, TimetableType
 from core.helper.enums import AcademicTrack
 from core.helper.enums import DayOfWeek
 from core.helper.enums import ReviewStatus
@@ -697,52 +697,129 @@ class ClassSchedule(TimeStampedModel):
         if not self.time_slot.is_break and not self.subject:
             raise ValidationError(_("Non-break periods must have a subject."))
 
+class TimetableEntry(TimeStampedModel):
+    timetable = models.ForeignKey(
+        "Timetable",
+        on_delete=models.CASCADE,
+        related_name="entries"
+    )
+
+    school = models.ForeignKey("users.School", on_delete=models.CASCADE)
+
+    class_room = models.ForeignKey("academics.ClassRoom", on_delete=models.CASCADE)
+
+    day_of_week = models.CharField(max_length=20, choices=DayOfWeek.choices, null=True, blank=True)
+    date = models.DateField(null=True, blank=True)  # for exams
+
+    time_slot = models.ForeignKey(TimeSlot, on_delete=models.CASCADE)
+
+    subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True)
+
+    teacher = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta(auto_prefetch.Model.Meta):
+        constraints = [
+            # Prevent clash INSIDE a timetable (not globally)
+            models.UniqueConstraint(
+                fields=["timetable", "day_of_week", "time_slot"],
+                name="unique_slot_per_timetable"
+            )
+        ]
+
 class Timetable(TimeStampedModel):
     """
-    Represents a complete timetable for a specific school.
+    Represents a timetable for a specific class.
+    Supports both class timetable and exam timetable.
     """
-
     school = models.ForeignKey(
         "users.School",
         on_delete=models.CASCADE,
         related_name="timetables",
     )
 
-    name = models.CharField(max_length=100)
-    academic_year = models.CharField(max_length=20)
-    term = models.CharField(max_length=50)
-    start_date = models.DateField()
-    end_date = models.DateField()
-    is_active = models.BooleanField(default=True)
-
-    schedules = models.ManyToManyField(
-        ClassSchedule,
+    class_room = models.ForeignKey(
+        "academics.ClassRoom",
+        on_delete=models.CASCADE,
         related_name="timetables",
     )
+
+    timetable_type = models.CharField(
+        max_length=10,
+        choices=TimetableType.choices,
+        default=TimetableType.CLASS,
+    )
+
+    name = models.CharField(max_length=100)
+
+    # USE FK INSTEAD OF STRING
+    academic_session = models.ForeignKey(
+        "academics.AcademicSession",
+        on_delete=models.CASCADE,
+        related_name="timetables",
+    )
+
+    term = models.ForeignKey(
+        "academics.AcademicTerm",
+        on_delete=models.CASCADE,
+        related_name="timetables",
+    )
+
+    start_date = models.DateField()
+    end_date = models.DateField()
+
+    is_active = models.BooleanField(default=True)
 
     class Meta(auto_prefetch.Model.Meta):
         db_table = "timetables"
         verbose_name = _("Timetable")
         verbose_name_plural = _("Timetables")
         ordering = ["-start_date"]
-        unique_together = ("school", "name", "academic_year", "term")
+
+        constraints = [
+            # Prevent duplicate timetable per class per type per term
+            models.UniqueConstraint(
+                fields=["school", "class_room", "term", "timetable_type"],
+                name="unique_timetable_per_class_term_type",
+            )
+        ]
 
     def __str__(self):
-        return f"{self.name} ({self.academic_year})"
+        return f"{self.name} - {self.class_room} ({self.get_timetable_type_display()})"
 
-    #  MULTI-TENANT SAFETY
     def clean(self):
-        for schedule in self.schedules.all():
-            if schedule.school != self.school:
+        # Ensure term belongs to session
+        if self.term and self.academic_session:
+            if self.term.session_id != self.academic_session_id:
                 raise ValidationError(
-                    _("All schedules must belong to the same school.")
+                    _("Selected term does not belong to the academic session.")
+                )
+
+        # Ensure class belongs to school
+        if self.class_room and self.school:
+            if self.class_room.school_id != self.school_id:
+                raise ValidationError(
+                    _("Classroom must belong to the same school.")
+                )
+
+        # Validate dates
+        if self.start_date and self.end_date:
+            if self.end_date <= self.start_date:
+                raise ValidationError(
+                    _("End date must be after start date.")
                 )
 
     def save(self, *args, **kwargs):
-        # Only one active timetable PER SCHOOL
+        # Only one active timetable per class per type
         if self.is_active:
             Timetable.objects.filter(
                 school=self.school,
+                class_room=self.class_room,
+                timetable_type=self.timetable_type,
                 is_active=True
             ).exclude(pk=self.pk).update(is_active=False)
 
