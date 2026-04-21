@@ -13,8 +13,12 @@ from core.applications.academics.api.views.accessment_entry_views import (
 )
 from core.applications.academics.api.views.accessment_entry_views import StudentViewSet
 from core.applications.academics.api.views.teachers_dashboard_views import (
-    TeacherDashboardViewSet, TeacherAssessmentRecordViewSet
+    TeacherAssessmentRecordViewSet,
 )
+from core.applications.academics.api.views.teachers_dashboard_views import (
+    TeacherDashboardViewSet,
+)
+from core.applications.academics.api.views.timetables_views import TimetableViewSet
 
 PREFIX = "academics"
 
@@ -49,6 +53,11 @@ router.register(
     "students",
     StudentViewSet,
     basename="students",
+)
+router.register(
+    "timetable",
+    TimetableViewSet,
+    basename="timetable",
 )
 
 

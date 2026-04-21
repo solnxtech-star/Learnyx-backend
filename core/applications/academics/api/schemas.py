@@ -7,6 +7,8 @@ from drf_spectacular.utils import extend_schema_view
 
 from core.applications.academics.api.serializers.accessment_entry_serializers import (
     AdminAssignSubjectsToStudentSerializer,
+)
+from core.applications.academics.api.serializers.accessment_entry_serializers import (
     BulkAssessmentEntrySerializer,
 )
 from core.applications.academics.api.serializers.accessment_entry_serializers import (
@@ -26,8 +28,9 @@ from core.applications.academics.api.serializers.accessment_entry_serializers im
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     AssessmentEntryCreateSerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     AssessmentEntrySerializer,
-    TeacherSubjectClassTermSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     AssessmentTypeSerializer,
@@ -57,7 +60,40 @@ from core.applications.academics.api.serializers.teachers_dashboard_serializers 
     TeacherClassroomSerializer,
 )
 from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
+    TeacherSubjectClassTermSerializer,
+)
+from core.applications.academics.api.serializers.teachers_dashboard_serializers import (
     TeacherSubjectSerializer,
+)
+from core.applications.academics.api.serializers.timetables_serializers import (
+    CloneTimetableRequestSerializer,
+)
+from core.applications.academics.api.serializers.timetables_serializers import (
+    ErrorResponseSerializer,
+)
+from core.applications.academics.api.serializers.timetables_serializers import (
+    MessageResponseSerializer,
+)
+from core.applications.academics.api.serializers.timetables_serializers import (
+    RemoveEntryRequestSerializer,
+)
+from core.applications.academics.api.serializers.timetables_serializers import (
+    TimetableBulkCreateSerializer,
+)
+from core.applications.academics.api.serializers.timetables_serializers import (
+    TimetableCreateUpdateSerializer,
+)
+from core.applications.academics.api.serializers.timetables_serializers import (
+    TimetableDetailSerializer,
+)
+from core.applications.academics.api.serializers.timetables_serializers import (
+    TimetableEntryBulkSerializer,
+)
+from core.applications.academics.api.serializers.timetables_serializers import (
+    TimetableEntrySerializer,
+)
+from core.applications.academics.api.serializers.timetables_serializers import (
+    TimetableListSerializer,
 )
 
 STUDENT_VIEWSET_SCHEMA = extend_schema_view(
@@ -810,5 +846,116 @@ accessment_record_schema = extend_schema_view(
         description="Update one or more fields of an assessment record.",
         request=AssessmentEntryCreateSerializer,
         responses={200: AssessmentEntrySerializer},
+    ),
+)
+
+
+timetable_schema = extend_schema_view(
+    list=extend_schema(
+        summary="List timetables",
+        description=(
+            "Retrieve a paginated list of timetables.\n\n"
+            "### Access Control\n"
+            "- School admins: all timetables within their school\n"
+            "- Teachers: only timetables for assigned classes\n"
+            "- Other users: restricted based on permissions\n\n"
+            "### Features\n"
+            "- Filtering by school, class, term, session\n"
+            "- Filter by timetable type (CLASS / EXAM)\n"
+            "- Active status filtering\n"
+            "- Date range filtering\n"
+            "- Search and ordering support"
+        ),
+        responses={200: TimetableListSerializer(many=True)},
+        tags=["Timetables"],
+    ),
+
+    retrieve=extend_schema(
+        summary="Retrieve timetable",
+        description="Get detailed information about a specific timetable including related metadata.",
+        responses={200: TimetableDetailSerializer},
+        tags=["Timetables"],
+    ),
+
+    create=extend_schema(
+        summary="Create timetable",
+        description=(
+            "Create a new timetable (CLASS or EXAM).\n\n"
+            "### Rules\n"
+            "- Only school admins (owners/principals) can create\n"
+            "- Timetable must belong to a valid school\n"
+            "- CLASS: requires day_of_week entries\n"
+            "- EXAM: requires date-based entries\n"
+            "- Only one active timetable per class/type is allowed\n"
+        ),
+        request=TimetableCreateUpdateSerializer,
+        responses={201: TimetableDetailSerializer},
+        tags=["Timetables"],
+    ),
+
+    update=extend_schema(
+        summary="Update timetable",
+        description="Fully replace an existing timetable.",
+        request=TimetableCreateUpdateSerializer,
+        responses={200: TimetableDetailSerializer},
+        tags=["Timetables"],
+    ),
+
+    partial_update=extend_schema(
+        summary="Partially update timetable",
+        description="Update specific fields of a timetable.",
+        request=TimetableCreateUpdateSerializer,
+        responses={200: TimetableDetailSerializer},
+        tags=["Timetables"],
+    ),
+
+    destroy=extend_schema(
+        summary="Delete timetable",
+        description=(
+            "Permanently delete a timetable and all associated entries. "
+            "This action cannot be undone."
+        ),
+        responses={204: None},
+        tags=["Timetables"],
+    ),
+
+    activate=extend_schema(
+        summary="Activate timetable",
+        description=(
+            "Activate a timetable.\n\n"
+            "Automatically deactivates other timetables of the same class and type."
+        ),
+        responses={200: MessageResponseSerializer},
+        tags=["Timetables"],
+    ),
+
+    clone=extend_schema(
+        summary="Clone timetable",
+        description="Create a duplicate of an existing timetable including all entries.",
+        request=CloneTimetableRequestSerializer,
+        responses={201: TimetableDetailSerializer},
+        tags=["Timetables"],
+    ),
+
+    remove_entry=extend_schema(
+        summary="Remove timetable entry",
+        description="Delete a specific entry from a timetable.",
+        request=RemoveEntryRequestSerializer,
+        responses={200: MessageResponseSerializer},
+        tags=["Timetables"],
+    ),
+
+    entries_by_day=extend_schema(
+        summary="Get timetable grouped by day",
+        description="Returns timetable entries grouped by day of week (CLASS timetables only).",
+        responses={200: None},
+        tags=["Timetable Views"],
+    ),
+
+    entries_by_date=extend_schema(
+        summary="Get timetable grouped by date",
+        description="Returns timetable entries grouped by date (EXAM timetables only).",
+        responses={200: None},
+        tags=["Timetable Views"],
     ),
 )

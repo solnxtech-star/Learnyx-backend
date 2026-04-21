@@ -1,6 +1,11 @@
+import contextlib
 from django.apps import AppConfig
 
 
 class AcademicsConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "core.applications.academics"
+
+    def ready(self):
+        with contextlib.suppress(ImportError):
+            import core.applications.academics.signals # noqa: F401, PLC0415
