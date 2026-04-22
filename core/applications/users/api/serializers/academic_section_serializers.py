@@ -1263,3 +1263,15 @@ class TeacherListWithAssignmentsSerializer(serializers.ModelSerializer):
             "staff_id",
             "assignments",  # replaces classrooms + subjects
         ]
+
+
+class ClassRoomListSerializer(serializers.ListSerializer):
+    def create(self, validated_data):
+        school = self.context["school"]
+
+        instances = [
+            ClassRoom(school=school, **item)
+            for item in validated_data
+        ]
+
+        return ClassRoom.objects.bulk_create(instances)

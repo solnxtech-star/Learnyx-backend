@@ -188,9 +188,12 @@ class TimetableEntryCreateUpdateSerializer(serializers.ModelSerializer):
 
 
 class TimetableCreateUpdateSerializer(serializers.ModelSerializer):
-    # Declared as a plain write-only list field so DRF does NOT
-    # try to validate entries through TimetableEntryCreateUpdateSerializer
-    # during is_valid() — we handle entries entirely in create/update.
+    """
+    Serializer for creating/updating timetables with nested entries.
+    The 'entries' field is write-only and accepts a list of entry data to be created
+    or updated along with the timetable.
+    """
+
     entries = serializers.ListField(
         child=serializers.DictField(),
         required=False,

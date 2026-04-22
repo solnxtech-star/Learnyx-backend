@@ -1,24 +1,22 @@
 from django.conf import settings
-from core.applications.users.api.views.admin_accessment_views import AssessmentPolicyViewSet, AssessmentTypeViewSet
-from rest_framework.routers import DefaultRouter, SimpleRouter
+from rest_framework.routers import DefaultRouter
+from rest_framework.routers import SimpleRouter
 
-
-from core.applications.users.api.views.academic_views import (
-    AcademicSessionViewSet,
-    AcademicTermViewSet,
-    SubjectViewSet,
-    TeacherViewSet,
+from core.applications.users.api.views.academic_views import AcademicSessionViewSet
+from core.applications.users.api.views.academic_views import AcademicTermViewSet
+from core.applications.users.api.views.academic_views import GenaralClassRoomViewSet
+from core.applications.users.api.views.academic_views import SubjectViewSet
+from core.applications.users.api.views.academic_views import TeacherViewSet
+from core.applications.users.api.views.admin_accessment_views import (
+    AssessmentPolicyViewSet,
 )
-from core.applications.users.api.views.admin_grading_views import (
-    AdminUsersViewset,
-    ClassRoomViewSet,
-    GradeScaleViewSet,
+from core.applications.users.api.views.admin_accessment_views import (
+    AssessmentTypeViewSet,
 )
-
+from core.applications.users.api.views.admin_grading_views import AdminUsersViewset
+from core.applications.users.api.views.admin_grading_views import ClassRoomViewSet
+from core.applications.users.api.views.admin_grading_views import GradeScaleViewSet
 from core.applications.users.api.views.views import UserViewSet
-
-
-
 
 PREFIX = "users"
 API_VERSION = settings.API_VERSION
@@ -41,6 +39,7 @@ router.register("teachers", TeacherViewSet, basename="teachers")
 router.register("grade-scales", GradeScaleViewSet, basename="grade-scales")
 router.register("accessment-policy", AssessmentPolicyViewSet, basename="accessment-policy" )
 router.register("accessment-type", AssessmentTypeViewSet, basename="accessment-type")
+router.register("general-classrooms", GenaralClassRoomViewSet, basename="general-classrooms")
 
 
 # 2. Generic/catch-all path LAST

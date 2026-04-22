@@ -6,6 +6,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.utils.translation import gettext_lazy as _
+from core.applications.users.api.serializers.admin_serializers import ClassRoomSerializer
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters
 from rest_framework import serializers
@@ -17,7 +18,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from core.applications.academics.models import AcademicSession
+from core.applications.academics.models import AcademicSession, ClassRoom
 from core.applications.academics.models import AcademicTerm
 from core.applications.academics.models import Subject
 from core.applications.academics.models import TermPeriod
@@ -27,7 +28,6 @@ from core.applications.users.api.schemas import SUBJECT_SCHEMA
 from core.applications.users.api.schemas import TeacherViewSetSchema
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicSessionSerializer,
-    auto_generate_periods,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicTermSerializer,
@@ -55,6 +55,9 @@ from core.applications.users.api.serializers.academic_section_serializers import
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     TeacherListWithAssignmentsSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
+    auto_generate_periods,
 )
 from core.applications.users.models import TeacherProfile
 from core.applications.users.permissions import IsPrincipalOrSchoolOwner
@@ -588,3 +591,10 @@ class TeacherViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(serializer.data)
 
         return Response(serializer.data, status=200)
+
+
+class GenaralClassRoomViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = ClassRoomSerializer
+
+    def get_queryset(self):
+        return ClassRoom.objects.filter(school=self.request.user.school)
