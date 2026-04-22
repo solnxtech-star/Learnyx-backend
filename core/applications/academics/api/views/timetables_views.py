@@ -20,7 +20,7 @@ from core.applications.academics.api.serializers.timetables_serializers import (
 from core.applications.academics.api.serializers.timetables_serializers import (
     TimetableListSerializer,
 )
-from core.applications.academics.models import TeachingAssignment
+from core.applications.academics.models import StudentClassAssignment, TeachingAssignment
 from core.applications.academics.models import Timetable
 from core.applications.academics.models import TimetableEntry
 from core.applications.academics.services.access_service import AccessService
@@ -125,18 +125,21 @@ class TimetableViewSet(viewsets.ModelViewSet):
             return qs.filter(school=user.school)
 
         if user.role == "teacher":
-            assigned_classes = TeachingAssignment.objects.filter(
-                teacher=user,
-                school=user.school,
-            ).values_list("classroom_id", flat=True)
-
             return qs.filter(
-                class_room_id__in=assigned_classes,
+                class_room__teachingassignment__teacher=user,
+                class_room__teachingassignment__school=user.school,
                 school=user.school,
-            )
+            ).distinct()
+
+        if user.role == "student":
+            return qs.filter(
+                class_room__student_assignments__student__user=user,
+                class_room__student_assignments__is_active=True,
+                class_room__school=user.school,
+                school=user.school,
+            ).distinct()
 
         return qs.none()
-
     def perform_create(self, serializer):
         user = self.request.user
         AccessService.enforce_admin(user)

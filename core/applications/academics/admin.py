@@ -15,7 +15,7 @@ from core.applications.academics.models import Subject
 from core.applications.academics.models import TeachingAssignment
 from core.applications.academics.models import TermPeriod
 from core.applications.academics.models import TimeSlot
-from core.applications.academics.models import Timetable
+from core.applications.academics.models import Timetable, TimetableEntry
 
 
 class TenantAdminMixin:
@@ -167,6 +167,21 @@ class ClassScheduleAdmin(admin.ModelAdmin):
     ordering = ("academic_class", "day_of_week")
 
 
+@admin.register(TimetableEntry)
+class TimetableEntryAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "timetable",
+        "subject",
+        "time_slot",
+        "teacher",
+    )
+    list_filter = ("timetable__school", "subject", "time_slot")
+    search_fields = (
+        "timetable__name",
+        "subject__name",
+        "teacher__email",
+    )
 @admin.register(Timetable)
 class TimetableAdmin(admin.ModelAdmin):
     list_display = (

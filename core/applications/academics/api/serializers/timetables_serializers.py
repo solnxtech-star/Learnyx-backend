@@ -115,7 +115,7 @@ class TimetableEntrySerializer(serializers.ModelSerializer):
 
     def get_teacher_name(self, obj):
         if obj.teacher:
-            return f"{obj.teacher.first_name} {obj.teacher.last_name}"
+            return f"{obj.teacher.user.name}"
         return None
 
 class TimetableListSerializer(serializers.ModelSerializer):
