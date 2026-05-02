@@ -9,10 +9,12 @@ from rest_framework import serializers
 from core.applications.users.api.serializers import serializers as user_serializers
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicSessionSerializer,
-    AdminAssignClassroomsAndSubjectsSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     AcademicTermSerializer,
+)
+from core.applications.users.api.serializers.academic_section_serializers import (
+    AdminAssignClassroomsAndSubjectsSerializer,
 )
 from core.applications.users.api.serializers.academic_section_serializers import (
     SubjectSerializer,
@@ -38,11 +40,17 @@ from core.applications.users.api.serializers.admin_accessment_serializers import
 from core.applications.users.api.serializers.admin_accessment_serializers import (
     DefaultAssessmentPolicySerializer,
 )
-from core.applications.users.api.serializers.admin_grading_serializers import (
-    TenantAwareGradeScaleSerializer,
+from core.applications.users.api.serializers.admin_dashboard_serializers import (
+    DashboardSerializer,
+)
+from core.applications.users.api.serializers.admin_dashboard_serializers import (
+    ErrorDetailSerializer,
 )
 from core.applications.users.api.serializers.admin_grading_serializers import (
     GradeScaleSerializer,
+)
+from core.applications.users.api.serializers.admin_grading_serializers import (
+    TenantAwareGradeScaleSerializer,
 )
 from core.applications.users.api.serializers.admin_serializers import (
     ClassRoomCreateSerializer,
@@ -1689,4 +1697,175 @@ Behavior:
 - Ensure that the deletion does not break any active assessment policies or calculations.
 """
     ),
+)
+
+_EXAMPLE_200_FULL = OpenApiExample(
+    name="Full response",
+    summary="All sections populated",
+    description=(
+        "Returned when the school has an active session, approved students "
+        "and teachers, and recent activity on record."
+    ),
+    value={
+        "overview": {
+            "active_classes": 12,
+            "total_students": 860,
+            "total_subjects": 24,
+            "total_teachers": 38,
+        },
+        "current_term": {
+            "term_name":    "First Term",
+            "session_name": "2024/2025",
+            "term_number":  1,
+            "status":       "Open",
+            "start_date":   "2024-09-01",
+            "end_date":     "2024-12-15",
+        },
+        "gender_distribution": {
+            "male":   65.0,
+            "female": 35.0,
+        },
+        "recent_activity": [
+            {
+                "label":      "Course Assignment Locked",
+                "identifier": "SS3 A",
+                "timestamp":  "2024-11-10T14:32:00Z",
+                "category":   "assignment",
+            },
+            {
+                "label":      "Subject Updated",
+                "identifier": "MTH101",
+                "timestamp":  "2024-11-10T10:15:00Z",
+                "category":   "subject",
+            },
+            {
+                "label":      "Results Uploaded",
+                "identifier": "PHY202",
+                "timestamp":  "2024-11-09T16:45:00Z",
+                "category":   "result",
+            },
+            {
+                "label":      "New Term Created",
+                "identifier": "2024/2025 First Term",
+                "timestamp":  "2024-09-01T08:00:00Z",
+                "category":   "term",
+            },
+        ],
+    },
+    response_only=True,
+    status_codes=["200"],
+)
+
+_EXAMPLE_200_EMPTY = OpenApiExample(
+    name="New school — no data yet",
+    summary="Null / empty sections",
+    description=(
+        "Returned for a newly onboarded school with no active session, "
+        "no approved students, and no activity on record. "
+        "Clients must handle null for current_term and {} for gender_distribution."
+    ),
+    value={
+        "overview": {
+            "active_classes": 0,
+            "total_students": 0,
+            "total_subjects": 0,
+            "total_teachers": 0,
+        },
+        "current_term":        None,
+        "gender_distribution": {},
+        "recent_activity":     [],
+    },
+    response_only=True,
+    status_codes=["200"],
+)
+
+_EXAMPLE_400 = OpenApiExample(
+    name="No school assigned",
+    summary="User account has no school linked",
+    value={"detail": "No school is associated with your account."},
+    response_only=True,
+    status_codes=["400"],
+)
+
+_EXAMPLE_401 = OpenApiExample(
+    name="Unauthenticated",
+    summary="Missing or expired JWT token",
+    value={"detail": "Authentication credentials were not provided."},
+    response_only=True,
+    status_codes=["401"],
+)
+
+_EXAMPLE_403 = OpenApiExample(
+    name="Forbidden",
+    summary="User is not a principal or school owner",
+    value={"detail": "You do not have permission to perform this action."},
+    response_only=True,
+    status_codes=["403"],
+)
+
+_EXAMPLE_429 = OpenApiExample(
+    name="Throttled",
+    summary="60 req/min limit exceeded",
+    value={"detail": "Request was throttled. Expected available in 12 seconds."},
+    response_only=True,
+    status_codes=["429"],
+)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Schema decorator
+# ──────────────────────────────────────────────────────────────────────────────
+
+admin_dashboard_schema = extend_schema(
+    operation_id="admin_dashboard_retrieve",
+    summary="Admin Dashboard Summary",
+    description=(
+        "Returns aggregated school statistics and a recent activity feed "
+        "for the admin dashboard.\n\n"
+        "All data is automatically scoped to the authenticated user's school. "
+        "A 30-second server-side cache (per school) is applied to protect "
+        "the database under high concurrent access.\n\n"
+        "**Term resolution order:**\n"
+        "1. `AcademicTerm` where `is_active=True` inside an active session\n"
+        "2. Highest `term_number` inside the active session (fallback)\n"
+        "3. `null` — client should render a 'No active term' placeholder\n\n"
+        "**Fault isolation:** each section is computed independently. "
+        "A failing DB query returns `null` for that section without "
+        "affecting the others."
+    ),
+    tags=["Admin Management"],
+    responses={
+        200: OpenApiResponse(
+            response=DashboardSerializer,
+            description=(
+                "Dashboard data retrieved successfully. "
+                "Any section may be null if its service method raised "
+                "an exception caught by the fault-isolation wrapper."
+            ),
+            examples=[_EXAMPLE_200_FULL, _EXAMPLE_200_EMPTY],
+        ),
+        400: OpenApiResponse(
+            response=ErrorDetailSerializer,
+            description="The authenticated user has no school assigned.",
+            examples=[_EXAMPLE_400],
+        ),
+        401: OpenApiResponse(
+            response=ErrorDetailSerializer,
+            description="Authentication credentials are missing or invalid.",
+            examples=[_EXAMPLE_401],
+        ),
+        403: OpenApiResponse(
+            response=ErrorDetailSerializer,
+            description="User is not a principal or school owner.",
+            examples=[_EXAMPLE_403],
+        ),
+        429: OpenApiResponse(
+            response=ErrorDetailSerializer,
+            description=(
+                "Rate limit exceeded — maximum 60 requests per minute per user. "
+                "Check the Retry-After response header."
+            ),
+            examples=[_EXAMPLE_429],
+        ),
+    },
 )

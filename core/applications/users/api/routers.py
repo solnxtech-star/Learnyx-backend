@@ -13,6 +13,7 @@ from core.applications.users.api.views.admin_accessment_views import (
 from core.applications.users.api.views.admin_accessment_views import (
     AssessmentTypeViewSet,
 )
+from core.applications.users.api.views.admin_dashboard_views import AdminDashboardView
 from core.applications.users.api.views.admin_grading_views import AdminUsersViewset
 from core.applications.users.api.views.admin_grading_views import ClassRoomViewSet
 from core.applications.users.api.views.admin_grading_views import GradeScaleViewSet
@@ -40,6 +41,7 @@ router.register("grade-scales", GradeScaleViewSet, basename="grade-scales")
 router.register("accessment-policy", AssessmentPolicyViewSet, basename="accessment-policy" )
 router.register("accessment-type", AssessmentTypeViewSet, basename="accessment-type")
 router.register("general-classrooms", GenaralClassRoomViewSet, basename="general-classrooms")
+router.register("admin-dashboard", AdminDashboardView, basename="admin-dashboard")
 
 
 # 2. Generic/catch-all path LAST

@@ -7,10 +7,11 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from core.applications.users.managers import TenantManager
-from core.helper.enums import AcademicClass, TimetableType
+from core.helper.enums import AcademicClass
 from core.helper.enums import AcademicTrack
 from core.helper.enums import DayOfWeek
 from core.helper.enums import ReviewStatus
+from core.helper.enums import TimetableType
 from core.helper.enums import UserRole
 from core.helper.models import TenantAwareModel
 from core.helper.models import TimeStampedModel

@@ -148,6 +148,36 @@ class AccountTrackedModel(TimeStampedModel):
 
 
 class TenantAwareModel(TimeStampedModel):
+    """
+    Abstract base model for all tenant-scoped data models.
+
+    Responsibilities:
+    ─────────────────────────────────────────────────────────────
+    1. Carries the school FK that scopes every row to a tenant
+    2. Auto-assigns school from thread-local context on save
+       so views never need to set it manually
+    3. Validates school is set before any write
+    4. Validates school is active before any write
+    5. Validates related objects belong to the same school
+       covering both TenantAwareModel and BaseProfile subclasses
+    6. Routes to correct database via TenantManager
+    7. Provides for_school() and unscoped() classmethods
+
+    Cross-tenant validation covers two relation types:
+    ─────────────────────────────────────────────────────────────
+    Type 1 — TenantAwareModel subclasses
+        Have a direct school FK
+        e.g. StudentEnrollment, StudentContact
+        Check: related_obj.school_id == self.school_id
+
+    Type 2 — BaseProfile subclasses
+        No direct school FK — school is via user.school
+        e.g. StudentProfile, TeacherProfile, AdminProfile, ParentProfile
+        Check: related_obj.user.school_id == self.school_id
+
+    Type 3 — Master models (User, School)
+        Cross-tenant by design — always skipped
+    """
 
     school = models.ForeignKey(
         "users.School",
@@ -174,7 +204,7 @@ class TenantAwareModel(TimeStampedModel):
         3. Log tenant context for debugging
         """
         self._assign_school_from_context()
-        self.full_clean()  # triggers clean() below
+        self.full_clean()
         logger.debug(
             "Saving %s → school=%s | db=%s",
             self.__class__.__name__,
@@ -186,14 +216,11 @@ class TenantAwareModel(TimeStampedModel):
     def _assign_school_from_context(self) -> None:
         """
         Auto-assign school from thread-local context if not already set.
-        This means views and services never need to manually set school=...
-        on every model they create.
 
         Raises ValidationError if school cannot be determined —
         this is always a programming error, not a user error.
         """
         if self.school_id:
-            # Already set — nothing to do
             return
 
         school = get_current_school()
@@ -223,11 +250,10 @@ class TenantAwareModel(TimeStampedModel):
         """
         Validate tenant consistency.
 
-        Checks:
-        1. school must be set (defence in depth after _assign_school_from_context)
-        2. school must be active — no writes to deactivated tenants
-        3. Any related TenantAwareModel fields must belong to the same school
-           to prevent cross-tenant data corruption
+        Order:
+        1. school must be set
+        2. school must be active
+        3. all related tenant objects must belong to same school
         """
         super().clean()
         self._validate_school_set()
@@ -246,7 +272,7 @@ class TenantAwareModel(TimeStampedModel):
         try:
             school = self.school
         except Exception:
-            return  # school not loaded yet — skip, caught by _validate_school_set
+            return
 
         if not school.is_active:
             raise ValidationError(
@@ -259,54 +285,66 @@ class TenantAwareModel(TimeStampedModel):
 
     def _validate_related_tenant_fields(self) -> None:
         """
-        Check all ForeignKey fields on this model.
-        If the related model is also a TenantAwareModel, it must
-        belong to the same school as self.
+        Check all ForeignKey fields on this model for cross-tenant violations.
 
-        This prevents cross-tenant corruption like:
-            StudentContact(school=SchoolA, student=<student from SchoolB>)
+        Handles three cases:
 
-        Only runs when school_id is set (after _validate_school_set passes).
+        Case 1 — TenantAwareModel subclass
+            Has a direct school FK.
+            Compare: related_obj.school_id vs self.school_id
+
+        Case 2 — Profile model (BaseProfile subclass)
+            No direct school FK — school reached via user.school_id.
+            Detected by presence of 'user' OneToOneField on the related model.
+            e.g. StudentProfile, TeacherProfile, AdminProfile, ParentProfile
+
+        Case 3 — Master model (User, School, etc.)
+            Cross-tenant by design — always skipped.
         """
         if not self.school_id:
             return
 
         for field in self._meta.get_fields():
-            # Only check ForeignKey fields (not reverse relations)
             if not isinstance(field, models.ForeignKey):
                 continue
 
-            # Skip the school FK itself
             if field.name == "school":
                 continue
 
-            # Skip fields pointing to master models (User, School etc.)
-            # These live on default DB and are cross-tenant by design
             related_model = field.related_model
             if not related_model:
                 continue
-            if not issubclass(related_model, TenantAwareModel):
-                continue
 
-            # Get the related object's value
-            related_id = getattr(self, f"{field.attname}", None)
+            related_id = getattr(self, field.attname, None)
             if not related_id:
-                continue  # nullable FK not set — skip
+                continue
 
             try:
                 related_obj = getattr(self, field.name)
             except related_model.DoesNotExist:
                 continue
 
-            # The critical check
-            if related_obj.school_id != self.school_id:
-                raise ValidationError(
-                    _(
-                        "%(field)s belongs to a different school. "
-                        "Cross-tenant relations are not permitted."
-                    ),
-                    params={"field": field.verbose_name or field.name},
-                )
+            # ----------------------------------------------------------
+            # Determine related_school_id based on related model type
+            # ----------------------------------------------------------
+            related_school_id = None
+
+            if issubclass(related_model, TenantAwareModel):
+                # Case 1 — direct school FK
+                related_school_id = related_obj.school_id
+
+            elif self._is_profile_model(related_model, related_obj):
+                # Case 2 — profile model, school via user.school_id
+                related_school_id = self._get_profile_school_id(related_obj)
+
+            else:
+                # Case 3 — master model (User, School) — skip
+                continue
+
+            # ----------------------------------------------------------
+            # Cross-tenant check
+            # ----------------------------------------------------------
+            if related_school_id and related_school_id != self.school_id:
                 logger.error(
                     "Cross-tenant relation detected: "
                     "%s.%s (school=%s) → %s (school=%s)",
@@ -314,8 +352,55 @@ class TenantAwareModel(TimeStampedModel):
                     field.name,
                     self.school_id,
                     related_model.__name__,
-                    related_obj.school_id,
+                    related_school_id,
                 )
+                raise ValidationError(
+                    _(
+                        "%(field)s belongs to a different school. "
+                        "Cross-tenant relations are not permitted."
+                    ),
+                    params={"field": field.verbose_name or field.name},
+                )
+
+        @staticmethod
+        def _is_profile_model(related_model, related_obj) -> bool:
+            """
+            Detect a BaseProfile subclass by structural signature.
+            BaseProfile is abstract so apps.get_model() cannot find it.
+            Instead we check:
+            1. Related model has a 'user' field
+            2. That field is a OneToOneField
+            3. The related object has no direct school_id attribute
+            """
+            # Must have a user field
+            try:
+                user_field = related_model._meta.get_field("user")
+            except Exception:
+                return False
+
+            # That field must be OneToOneField (BaseProfile pattern)
+            if not isinstance(user_field, models.OneToOneField):
+                return False
+
+            # Must not have a direct school FK
+            # (that would make it a TenantAwareModel — already handled)
+            has_direct_school = any(
+                isinstance(f, models.ForeignKey) and f.name == "school"
+                for f in related_model._meta.get_fields()
+                if isinstance(f, models.ForeignKey)
+            )
+            return not has_direct_school
+
+        @staticmethod
+        def _get_profile_school_id(related_obj) -> str | None:
+            """
+            Extract school_id from a profile model via user.school_id.
+            Returns None if the path is broken for any reason.
+            """
+            try:
+                return related_obj.user.school_id
+            except Exception:
+                return None
 
     # ------------------------------------------------------------------
     # Classmethods — querying helpers
@@ -327,9 +412,6 @@ class TenantAwareModel(TimeStampedModel):
         Explicit school-scoped queryset.
         Use when you need data for a specific school regardless
         of the current thread-local context.
-
-        Example:
-            StudentContact.for_school(school).filter(is_primary=True)
         """
         return cls.objects.for_school(school)
 
@@ -339,9 +421,6 @@ class TenantAwareModel(TimeStampedModel):
         Unscoped queryset — returns all rows across all tenants.
         Use ONLY for superadmin / cross-tenant reporting.
         Never expose this to tenant-level views or APIs.
-
-        Example:
-            StudentContact.unscoped().filter(name="John")
         """
         return cls.objects.unscoped()
 
